@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+'use client';
+import React, { useState, useMemo, useRef } from 'react';
 
 export type SupportedLocale = 'en-US' | 'es-ES' | 'fr-FR' | 'pt-BR';
 
@@ -21,6 +22,19 @@ const LOCALES: { code: SupportedLocale; label: string }[] = [
   { code: 'fr-FR', label: 'Français (fr-FR)' },
   { code: 'pt-BR', label: 'Português (pt-BR)' }
 ];
+
+function detectBrowserLocale(explicitLocale?: SupportedLocale): SupportedLocale {
+  if (explicitLocale) return explicitLocale;
+  try {
+    if (typeof navigator !== 'undefined' && navigator.language) {
+      const lang = navigator.language.toLowerCase();
+      if (lang.startsWith('es')) return 'es-ES';
+      if (lang.startsWith('fr')) return 'fr-FR';
+      if (lang.startsWith('pt')) return 'pt-BR';
+    }
+  } catch {}
+  return 'en-US';
+}
 
 const DEFAULT_ENTRIES: TranslationEntry[] = [
   {
@@ -57,7 +71,7 @@ const DEFAULT_ENTRIES: TranslationEntry[] = [
 
 export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
   storageKey = 'agentmidas_i18n_framework_v1',
-  initialLocale = 'en-US',
+  initialLocale,
   initialEntries = DEFAULT_ENTRIES,
   onChange
 }) => {
@@ -72,7 +86,7 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
     return initialEntries;
   });
 
-  const [activeLocale, setActiveLocale] = useState<SupportedLocale>(initialLocale);
+  const [activeLocale, setActiveLocale] = useState<SupportedLocale>(() => detectBrowserLocale(initialLocale));
   const [sampleName, setSampleName] = useState('Avery');
   const [sampleCount, setSampleCount] = useState(12);
   const [sampleAmount, setSampleAmount] = useState('$1,450.00');
@@ -80,22 +94,27 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
   const [newEnValue, setNewEnValue] = useState('');
   const [notice, setNotice] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const saveSeqRef = useRef(0);
 
   const persistEntries = async (next: TranslationEntry[], msg?: string) => {
+    const seq = ++saveSeqRef.current;
     const prev = entries;
     setEntries(next);
     setErrorMsg('');
     try {
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
       if (onChange) {
         await onChange(next);
       }
+      if (seq !== saveSeqRef.current) return;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
       if (msg) setNotice(msg);
     } catch {
-      setEntries(prev);
-      setErrorMsg('Failed to persist i18n catalog; state rolled back.');
+      if (seq === saveSeqRef.current) {
+        setEntries(prev);
+        setErrorMsg('Failed to persist i18n catalog; state rolled back.');
+      }
     }
   };
 
@@ -161,7 +180,7 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
           <div>
             <h1 className="text-2xl font-bold text-[#D4AF37]">Agent Midas i18n Framework & Locale Inspector</h1>
             <p className="text-sm text-zinc-400">
-              Dynamic locale switching, parameter interpolation, fallback resolution, and catalog coverage
+              Dynamic locale switching, browser locale auto-detection, parameter interpolation, and fallback resolution
             </p>
           </div>
           <div className="flex gap-2" role="tablist" aria-label="Active Locale Selector">
@@ -193,7 +212,6 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
           </div>
         )}
 
-        {/* Coverage Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {coverageByLocale.map(c => (
             <div key={c.code} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
@@ -206,7 +224,6 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
           ))}
         </div>
 
-        {/* Live Interpolation Preview */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
           <h2 className="text-base font-bold text-[#D4AF37]">
             Live Interpolation Preview ({activeLocale})
@@ -253,7 +270,6 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
           </div>
         </div>
 
-        {/* Add Key + Translation Matrix */}
         <form onSubmit={handleAddKey} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap gap-3">
           <input
             type="text"
