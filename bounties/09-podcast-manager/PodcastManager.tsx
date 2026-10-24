@@ -37,12 +37,21 @@ const DEFAULT_EPISODES: PodcastEpisode[] = [
     title: 'High-Conversion Funnel Engineering & Statistical Power',
     guestName: 'Clara Lin',
     durationSec: 2190,
-    audioUrl: 'https://actions.google.com/sounds/v1/ambiences/coffee_shop.ogg',
+    audioUrl: 'https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg',
     showNotes: 'How two-proportion z-tests eliminate false positives in SaaS checkout flows.',
     downloadsCount: 3910,
     publishedAt: '2026-10-22'
   }
 ];
+
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
 
 function isValidEpisode(item: unknown): item is PodcastEpisode {
   if (!item || typeof item !== 'object') return false;
@@ -52,6 +61,8 @@ function isValidEpisode(item: unknown): item is PodcastEpisode {
     typeof e.episodeNumber === 'number' &&
     typeof e.title === 'string' &&
     typeof e.guestName === 'string' &&
+    typeof e.audioUrl === 'string' &&
+    e.audioUrl.length > 0 &&
     typeof e.durationSec === 'number' &&
     e.durationSec > 0 &&
     typeof e.downloadsCount === 'number' &&
@@ -84,6 +95,7 @@ export const PodcastManager: React.FC<PodcastManagerProps> = ({
   const [selectedId, setSelectedId] = useState<string>(episodes[0]?.id || 'ep-101');
   const [title, setTitle] = useState('');
   const [guestName, setGuestName] = useState('');
+  const [audioUrlInput, setAudioUrlInput] = useState('https://actions.google.com/sounds/v1/ambiences/coffee_shop.ogg');
   const [durationInput, setDurationInput] = useState('1800');
   const [showNotes, setShowNotes] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -122,8 +134,14 @@ export const PodcastManager: React.FC<PodcastManagerProps> = ({
     e.preventDefault();
     if (saveLockRef.current) return;
     const dur = Number(durationInput.trim());
-    if (!title.trim() || !guestName.trim() || !Number.isInteger(dur) || dur <= 0) {
-      setErrorMsg('Episode title, guest name, and positive integer duration (seconds) are required.');
+    const trimmedAudio = audioUrlInput.trim();
+    let validAudioUrl = false;
+    try {
+      const parsed = new URL(trimmedAudio);
+      validAudioUrl = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {}
+    if (!title.trim() || !guestName.trim() || !validAudioUrl || !Number.isInteger(dur) || dur <= 0) {
+      setErrorMsg('Episode title, guest name, valid HTTP/HTTPS audio URL, and positive integer duration are required.');
       return;
     }
     const nextNum = episodesRef.current.reduce((m, ep) => Math.max(m, ep.episodeNumber), 0) + 1;
@@ -133,7 +151,7 @@ export const PodcastManager: React.FC<PodcastManagerProps> = ({
       title: title.trim(),
       guestName: guestName.trim(),
       durationSec: dur,
-      audioUrl: 'https://actions.google.com/sounds/v1/ambiences/coffee_shop.ogg',
+      audioUrl: trimmedAudio,
       showNotes: showNotes.trim() || 'Episode show notes and transcript summary.',
       downloadsCount: 0,
       publishedAt: new Date().toISOString().slice(0, 10)
@@ -152,9 +170,12 @@ export const PodcastManager: React.FC<PodcastManagerProps> = ({
   const rssXmlPreview = useMemo(() => {
     const items = episodes
       .slice(0, 3)
-      .map(ep => `  <item><title>Ep #${ep.episodeNumber}: ${ep.title}</title><itunes:duration>${ep.durationSec}</itunes:duration></item>`)
+      .map(
+        ep =>
+          `  <item>\n    <title>Ep #${ep.episodeNumber}: ${escapeXml(ep.title)}</title>\n    <enclosure url="${escapeXml(ep.audioUrl)}" type="audio/ogg" length="${ep.durationSec * 16000}" />\n    <itunes:duration>${ep.durationSec}</itunes:duration>\n  </item>`
+      )
       .join('\n');
-    return `<rss version="2.0">\n<channel>\n  <title>Agent Midas Podcast</title>\n${items}\n</channel>\n</rss>`;
+    return `<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">\n<channel>\n  <title>Agent Midas Podcast</title>\n${items}\n</channel>\n</rss>`;
   }, [episodes]);
 
   return (
@@ -163,7 +184,7 @@ export const PodcastManager: React.FC<PodcastManagerProps> = ({
         <header className="border-b border-zinc-800 pb-4 flex justify-between items-center">
           <div>
             <h1 className="text-2xl font-bold text-[#D4AF37]">Podcast Studio & RSS Feed Manager</h1>
-            <p className="text-sm text-zinc-400">Manage episodes, HTML5 audio playback, download telemetry, and RSS syndication</p>
+            <p className="text-sm text-zinc-400">Manage episodes, HTML5 audio playback, enclosure syndication, and download telemetry</p>
           </div>
           <div className="bg-zinc-900 border border-zinc-800 px-4 py-2 rounded text-right">
             <div className="text-xs text-zinc-400">Total Downloads</div>
@@ -184,6 +205,7 @@ export const PodcastManager: React.FC<PodcastManagerProps> = ({
               <input aria-label="Guest Name" value={guestName} onChange={e => setGuestName(e.target.value)} disabled={isSaving} placeholder="Featured Guest" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
               <input aria-label="Duration Seconds" type="number" min={1} value={durationInput} onChange={e => setDurationInput(e.target.value)} disabled={isSaving} placeholder="Duration (sec)" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
             </div>
+            <input aria-label="Audio Recording URL" value={audioUrlInput} onChange={e => setAudioUrlInput(e.target.value)} disabled={isSaving} placeholder="https://.../episode.ogg" className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
             <textarea aria-label="Episode Show Notes" value={showNotes} onChange={e => setShowNotes(e.target.value)} disabled={isSaving} rows={2} placeholder="Show notes & timestamps..." className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
             <button type="submit" disabled={isSaving} className="bg-[#D4AF37] text-black font-bold text-xs px-4 py-2 rounded">
               + Publish Episode
@@ -195,7 +217,7 @@ export const PodcastManager: React.FC<PodcastManagerProps> = ({
               <div className="text-xs text-[#D4AF37] font-bold">NOW PLAYING · EPISODE #{activeEpisode.episodeNumber}</div>
               <h2 className="text-base font-bold text-white">{activeEpisode.title}</h2>
               <p className="text-xs text-zinc-400">Guest: {activeEpisode.guestName} · {Math.round(activeEpisode.durationSec / 60)} mins</p>
-              <audio controls src={activeEpisode.audioUrl} className="w-full" />
+              <audio key={activeEpisode.audioUrl} controls src={activeEpisode.audioUrl} className="w-full" />
               <pre className="bg-zinc-950 border border-zinc-800 rounded p-2 text-xs text-zinc-400 overflow-x-auto">{rssXmlPreview}</pre>
             </div>
           )}
