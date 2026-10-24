@@ -29,6 +29,27 @@ const DEFAULT_SNAPSHOTS: RevenueSnapshot[] = [
   { id: 'rev-4', periodLabel: '2026-10', startingMrr: 340100, newMrr: 58400, expansionMrr: 13600, churnedMrr: 2400, activeCustomers: 425, arpu: 964, grossMarginPct: 85 }
 ];
 
+function isValidSnapshot(s: any): s is RevenueSnapshot {
+  return (
+    s &&
+    typeof s === 'object' &&
+    typeof s.id === 'string' &&
+    typeof s.periodLabel === 'string' &&
+    typeof s.startingMrr === 'number' &&
+    Number.isFinite(s.startingMrr) &&
+    typeof s.newMrr === 'number' &&
+    Number.isFinite(s.newMrr) &&
+    typeof s.expansionMrr === 'number' &&
+    Number.isFinite(s.expansionMrr) &&
+    typeof s.churnedMrr === 'number' &&
+    Number.isFinite(s.churnedMrr) &&
+    typeof s.activeCustomers === 'number' &&
+    s.activeCustomers > 0 &&
+    typeof s.arpu === 'number' &&
+    typeof s.grossMarginPct === 'number'
+  );
+}
+
 export const RevenueDashboard: React.FC<RevenueDashboardProps> = ({
   storageKey = 'agentmidas_revenue_dashboard_v2',
   initialSnapshots = DEFAULT_SNAPSHOTS,
@@ -37,15 +58,10 @@ export const RevenueDashboard: React.FC<RevenueDashboardProps> = ({
   onFetchSnapshots,
   onChange
 }) => {
+  // Initialize from initialSnapshots to avoid SSR/client hydration mismatch; load localStorage post-mount
   const [snapshots, setSnapshots] = useState<RevenueSnapshot[]>(() => {
-    try {
-      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch {}
-    return initialSnapshots.length > 0 ? initialSnapshots : DEFAULT_SNAPSHOTS;
+    const validInit = Array.isArray(initialSnapshots) ? initialSnapshots.filter(isValidSnapshot) : [];
+    return validInit.length > 0 ? validInit : DEFAULT_SNAPSHOTS;
   });
 
   const snapshotsRef = useRef<RevenueSnapshot[]>(snapshots);
@@ -55,6 +71,22 @@ export const RevenueDashboard: React.FC<RevenueDashboardProps> = ({
   const onFetchRef = useRef(onFetchSnapshots);
   onFetchRef.current = onFetchSnapshots;
   const opSeqRef = useRef(0);
+
+  useEffect(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const valid = parsed.filter(isValidSnapshot);
+          if (valid.length > 0) {
+            snapshotsRef.current = valid;
+            setSnapshots(valid);
+          }
+        }
+      }
+    } catch {}
+  }, [storageKey]);
 
   const [rangeFilter, setRangeFilter] = useState<'ALL' | 'LAST_3' | 'LATEST'>('ALL');
   const [liveSyncEnabled, setLiveSyncEnabled] = useState<boolean>(Boolean(onFetchSnapshots || liveEndpoint));
@@ -68,7 +100,8 @@ export const RevenueDashboard: React.FC<RevenueDashboardProps> = ({
 
   const persistSnapshots = useCallback(async (next: RevenueSnapshot[], seqOverride?: number): Promise<boolean> => {
     const seq = seqOverride ?? ++opSeqRef.current;
-    const safeNext = next.length > 0 ? next : DEFAULT_SNAPSHOTS;
+    const validNext = next.filter(isValidSnapshot);
+    const safeNext = validNext.length > 0 ? validNext : DEFAULT_SNAPSHOTS;
     const prev = snapshotsRef.current;
     snapshotsRef.current = safeNext;
     setSnapshots(safeNext);
@@ -100,8 +133,9 @@ export const RevenueDashboard: React.FC<RevenueDashboardProps> = ({
     if (onFetchRef.current) {
       try {
         const data = await onFetchRef.current();
-        if (Array.isArray(data) && data.length > 0) {
-          fetched = data;
+        const valid = Array.isArray(data) ? data.filter(isValidSnapshot) : [];
+        if (valid.length > 0) {
+          fetched = valid;
         } else {
           callbackFailed = true;
         }
@@ -115,10 +149,11 @@ export const RevenueDashboard: React.FC<RevenueDashboardProps> = ({
         const res = await fetch(liveEndpoint);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          fetched = data;
+        const valid = Array.isArray(data) ? data.filter(isValidSnapshot) : [];
+        if (valid.length > 0) {
+          fetched = valid;
         } else {
-          throw new Error('Empty payload');
+          throw new Error('Invalid snapshot payload');
         }
       } catch (err: any) {
         if (seq === opSeqRef.current) {
@@ -131,7 +166,7 @@ export const RevenueDashboard: React.FC<RevenueDashboardProps> = ({
     if (seq !== opSeqRef.current) return;
 
     if (callbackFailed && !fetched) {
-      setSyncError('Live refresh failed: onFetchSnapshots rejected or returned empty data.');
+      setSyncError('Live refresh failed: onFetchSnapshots rejected or returned invalid data.');
       return;
     }
 
@@ -164,11 +199,11 @@ export const RevenueDashboard: React.FC<RevenueDashboardProps> = ({
 
   const kpis = useMemo(() => {
     const current = visibleSnapshots[visibleSnapshots.length - 1] ?? DEFAULT_SNAPSHOTS[0];
-    const startBase = Math.max(1, current.startingMrr || 180000);
+    const startBase = Math.max(0, current.startingMrr ?? 0);
     const netNewMrr = current.newMrr + current.expansionMrr - current.churnedMrr;
-    const totalMrr = startBase + netNewMrr;
+    const totalMrr = Math.max(0, startBase + netNewMrr);
     const arr = totalMrr * 12;
-    const churnRatePct = (current.churnedMrr / startBase) * 100;
+    const churnRatePct = startBase > 0 ? (current.churnedMrr / startBase) * 100 : 0;
     const monthlyChurnDecimal = Math.max(0.005, churnRatePct / 100);
     const ltv = (current.arpu * (current.grossMarginPct / 100)) / monthlyChurnDecimal;
     return { totalMrr, netNewMrr, arr, churnRatePct, ltv };
@@ -185,8 +220,9 @@ export const RevenueDashboard: React.FC<RevenueDashboardProps> = ({
       return;
     }
     const prevLast = safeSnapshots[safeSnapshots.length - 1] ?? DEFAULT_SNAPSHOTS[0];
-    const prevEndingMrr = (prevLast.startingMrr || 180000) + prevLast.newMrr + prevLast.expansionMrr - prevLast.churnedMrr;
-    const endingMrr = prevEndingMrr + nMrr + eMrr - cMrr;
+    const prevStart = prevLast.startingMrr ?? 0;
+    const prevEndingMrr = Math.max(0, prevStart + prevLast.newMrr + prevLast.expansionMrr - prevLast.churnedMrr);
+    const endingMrr = Math.max(0, prevEndingMrr + nMrr + eMrr - cMrr);
     const created: RevenueSnapshot = {
       id: `rev-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       periodLabel: periodLabel.trim(),
@@ -258,11 +294,11 @@ export const RevenueDashboard: React.FC<RevenueDashboardProps> = ({
         </div>
 
         <form onSubmit={handleAddSnapshot} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 grid grid-cols-2 md:grid-cols-6 gap-3">
-          <input value={periodLabel} onChange={e => setPeriodLabel(e.target.value)} placeholder="Period (YYYY-MM)" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
-          <input type="number" value={newMrr} onChange={e => setNewMrr(e.target.value)} placeholder="New MRR" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
-          <input type="number" value={expansionMrr} onChange={e => setExpansionMrr(e.target.value)} placeholder="Expansion MRR" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
-          <input type="number" value={churnedMrr} onChange={e => setChurnedMrr(e.target.value)} placeholder="Churned MRR" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
-          <input type="number" value={activeCustomers} onChange={e => setActiveCustomers(e.target.value)} placeholder="Customers" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
+          <input aria-label="Period Label" value={periodLabel} onChange={e => setPeriodLabel(e.target.value)} placeholder="Period (YYYY-MM)" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
+          <input aria-label="New MRR" type="number" value={newMrr} onChange={e => setNewMrr(e.target.value)} placeholder="New MRR" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
+          <input aria-label="Expansion MRR" type="number" value={expansionMrr} onChange={e => setExpansionMrr(e.target.value)} placeholder="Expansion MRR" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
+          <input aria-label="Churned MRR" type="number" value={churnedMrr} onChange={e => setChurnedMrr(e.target.value)} placeholder="Churned MRR" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
+          <input aria-label="Active Customers" type="number" value={activeCustomers} onChange={e => setActiveCustomers(e.target.value)} placeholder="Customers" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
           <button type="submit" className="bg-[#D4AF37] text-black font-bold text-xs rounded px-3 py-1.5">+ Record Period</button>
         </form>
 
@@ -280,8 +316,8 @@ export const RevenueDashboard: React.FC<RevenueDashboardProps> = ({
             </thead>
             <tbody className="divide-y divide-zinc-800">
               {visibleSnapshots.map(s => {
-                const start = s.startingMrr || 180000;
-                const ending = start + s.newMrr + s.expansionMrr - s.churnedMrr;
+                const start = Math.max(0, s.startingMrr ?? 0);
+                const ending = Math.max(0, start + s.newMrr + s.expansionMrr - s.churnedMrr);
                 return (
                   <tr key={s.id}>
                     <td className="p-3 font-mono text-[#D4AF37]">{s.periodLabel}</td>
