@@ -2,455 +2,181 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 
-export interface RecordItem {
+export interface KBArticle {
   id: string;
-  parentId: string | null;
-  depth: number;
-  name: string;
-  category: string;
-  status: 'Active' | 'Pending' | 'Completed' | 'Compressed';
-  primaryMetric: number;
-  sampleSize: number;
-  conversions: number;
-  retryAttempts: number;
-  passupRecipient: string;
-  updatedAt: string;
-  notes: string;
+  title: string;
+  category: 'Getting Started' | 'Affiliate & Billing' | 'API & Security';
+  body: string;
+  helpfulYes: number;
+  helpfulNo: number;
 }
 
-export interface KnowledgeBaseBuilderProps {
-  initialItems?: RecordItem[];
-  storageKey?: string;
-}
-
-const DEFAULT_ITEMS: RecordItem[] = [
+const DEFAULT_ARTICLES: KBArticle[] = [
   {
-    id: 'AM-2101',
-    parentId: null,
-    depth: 0,
-    name: 'Knowledge Base Builder — Root Sponsor / Control Node',
-    category: 'Tier-1 Production',
-    status: 'Active',
-    primaryMetric: 14850,
-    sampleSize: 2400,
-    conversions: 356,
-    retryAttempts: 0,
-    passupRecipient: 'Root Sponsor (Direct 75%)',
-    updatedAt: '2026-10-24 06:15 UTC',
-    notes: 'Searchable knowledge base with category hierarchy, semantic relevance scoring, and helpfulness feedback'
+    id: 'kb-1',
+    title: 'How the 75% Two-Up Affiliate Commission Works',
+    category: 'Affiliate & Billing',
+    body: 'Every affiliate passes up their first 2 sales to their sponsor and keeps 75% recurring commissions on sale #3 through infinity.',
+    helpfulYes: 48,
+    helpfulNo: 2,
   },
   {
-    id: 'AM-2102',
-    parentId: 'AM-2101',
-    depth: 1,
-    name: 'Knowledge Base Builder — Sale #1 (Two-Up Passup to Root)',
-    category: 'Automation',
-    status: 'Active',
-    primaryMetric: 8420,
-    sampleSize: 2350,
-    conversions: 452,
-    retryAttempts: 1,
-    passupRecipient: 'AM-2101 (Two-Up Passup #1)',
-    updatedAt: '2026-10-24 06:40 UTC',
-    notes: 'First qualifying sale passed up to upline sponsor under Two-Up rules.'
+    id: 'kb-2',
+    title: 'Zero-Dependency Security & CLA Compliance',
+    category: 'API & Security',
+    body: 'All Agent Midas modules use strict TypeScript and pass the 6-layer security pipeline without third-party runtime packages.',
+    helpfulYes: 35,
+    helpfulNo: 1,
   },
-  {
-    id: 'AM-2103',
-    parentId: 'AM-2101',
-    depth: 1,
-    name: 'Knowledge Base Builder — Inactive Node (Dynamic Compression)',
-    category: 'Optimization',
-    status: 'Compressed',
-    primaryMetric: 0,
-    sampleSize: 1800,
-    conversions: 210,
-    retryAttempts: 2,
-    passupRecipient: 'Compressed to AM-2101',
-    updatedAt: '2026-10-24 07:05 UTC',
-    notes: 'Inactive node automatically compressed so child volume rolls up without depth loss.'
-  },
-  {
-    id: 'AM-2104',
-    parentId: 'AM-2103',
-    depth: 2,
-    name: 'Knowledge Base Builder — Sale #3 (Retained Direct 75% Stream)',
-    category: 'Compliance',
-    status: 'Active',
-    primaryMetric: 6190,
-    sampleSize: 1950,
-    conversions: 312,
-    retryAttempts: 0,
-    passupRecipient: 'Retained by Direct Qualifier (Effective Depth 1 after Compression)',
-    updatedAt: '2026-10-24 07:10 UTC',
-    notes: 'Third and subsequent referrals remain permanently on direct sponsor leg.'
-  }
 ];
 
-export function KnowledgeBaseBuilder({
-  initialItems = DEFAULT_ITEMS,
-  storageKey = 'agentmidas_bounty_21_v2',
-}: KnowledgeBaseBuilderProps = {}) {
-  const [items, setItems] = useState<RecordItem[]>(initialItems);
-  const [query, setQuery] = useState<string>('');
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [enableCompression, setEnableCompression] = useState<boolean>(true);
-  const [newName, setNewName] = useState<string>('');
-  const [newParentId, setNewParentId] = useState<string>('AM-2101');
-  const [newCategory, setNewCategory] = useState<string>('Tier-1 Production');
-  const [newPrimary, setNewPrimary] = useState<string>('5000');
-  const [selectedId, setSelectedId] = useState<string>(initialItems[0]?.id ?? 'AM-2101');
+const STORAGE_KEY = 'agentmidas_kb_articles_v2';
+
+export function KnowledgeBaseBuilder() {
+  const [articles, setArticles] = useState<KBArticle[]>(DEFAULT_ARTICLES);
+  const [search, setSearch] = useState<string>('');
+  const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
+  const [newTitle, setNewTitle] = useState<string>('');
+  const [newCategory, setNewCategory] = useState<KBArticle['category']>('Getting Started');
+  const [newBody, setNewBody] = useState<string>('');
 
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(storageKey);
+      const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved) as RecordItem[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setItems(parsed);
-          setSelectedId(parsed[0].id);
-        }
+        const parsed = JSON.parse(saved) as KBArticle[];
+        if (Array.isArray(parsed) && parsed.length > 0) setArticles(parsed);
       }
     } catch {}
-  }, [storageKey]);
+  }, []);
 
-  const persistItems = (next: RecordItem[]) => {
-    setItems(next);
+  const persist = (next: KBArticle[]) => {
+    setArticles(next);
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(next));
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     } catch {}
   };
 
-  const filteredItems = useMemo(() => {
-    return items.filter(item => {
-      const matchesStatus = statusFilter === 'ALL' || item.status === statusFilter;
-      const q = query.trim().toLowerCase();
-      const matchesQuery =
-        !q ||
-        item.name.toLowerCase().includes(q) ||
-        item.id.toLowerCase().includes(q) ||
-        item.category.toLowerCase().includes(q);
-      return matchesStatus && matchesQuery;
-    });
-  }, [items, query, statusFilter]);
-
-  const summary = useMemo(() => {
-    const activeItems = items.filter(i => i.status === 'Active');
-    const totalVolume = activeItems.reduce((acc, i) => acc + i.primaryMetric, 0);
-    const totalSamples = items.reduce((acc, i) => acc + i.sampleSize, 0);
-    const totalConv = items.reduce((acc, i) => acc + i.conversions, 0);
-    const convRate = totalSamples > 0 ? (totalConv / totalSamples) * 100 : 0;
-
-    // Two-proportion Z-score calculation between first two cohorts
-    const a = items[0];
-    const b = items[1];
-    let zScore = 0;
-    if (a && b && a.sampleSize > 0 && b.sampleSize > 0) {
-      const p1 = a.conversions / a.sampleSize;
-      const p2 = b.conversions / b.sampleSize;
-      const pPool = (a.conversions + b.conversions) / (a.sampleSize + b.sampleSize);
-      const se = Math.sqrt(pPool * (1 - pPool) * (1 / a.sampleSize + 1 / b.sampleSize));
-      zScore = se > 0 ? Math.abs(p2 - p1) / se : 0;
-    }
-
-    return {
-      totalVolume,
-      convRate: convRate.toFixed(2),
-      zScore: zScore.toFixed(2),
-      isSignificant: zScore >= 1.96,
-      activeCount: activeItems.length,
-    };
-  }, [items]);
-
-  const selectedItem = useMemo(
-    () => items.find(i => i.id === selectedId) ?? items[0],
-    [items, selectedId]
-  );
-
-  function handleCreateRecord(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!newName.trim()) return;
-    const parentNode = items.find(i => i.id === newParentId) ?? null;
-    const siblingCount = items.filter(i => i.parentId === newParentId).length;
-    const isTwoUpPassup = siblingCount < 2 && parentNode !== null;
-
-    const created: RecordItem = {
-      id: `AM-21${String(items.length + 1).padStart(2, '0')}`,
-      parentId: parentNode ? parentNode.id : null,
-      depth: parentNode ? parentNode.depth + 1 : 0,
-      name: newName.trim(),
-      category: newCategory,
-      status: 'Active',
-      primaryMetric: Math.max(0, Number(newPrimary) || 0),
-      sampleSize: 1000,
-      conversions: 165,
-      retryAttempts: 0,
-      passupRecipient: isTwoUpPassup
-        ? `Passed Up to ${parentNode?.parentId ?? parentNode?.id} (Two-Up Sale #${siblingCount + 1})`
-        : `Retained by ${parentNode?.id ?? 'Root'} (Direct 75%)`,
-      updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC',
-      notes: 'Persisted to localStorage with Two-Up passup & dynamic compression evaluation.',
-    };
-    persistItems([created, ...items]);
-    setSelectedId(created.id);
-    setNewName('');
-  }
-
-  function handleCycleStatus(id: string) {
-    const order: RecordItem['status'][] = ['Active', 'Pending', 'Completed', 'Compressed'];
-    persistItems(
-      items.map(item => {
-        if (item.id !== id) return item;
-        const idx = order.indexOf(item.status);
-        const next = order[(idx + 1) % order.length];
-        return { ...item, status: next };
-      })
+  const voteFeedback = (id: string, isHelpful: boolean) => {
+    persist(
+      articles.map(a =>
+        a.id === id
+          ? {
+              ...a,
+              helpfulYes: isHelpful ? a.helpfulYes + 1 : a.helpfulYes,
+              helpfulNo: !isHelpful ? a.helpfulNo + 1 : a.helpfulNo,
+            }
+          : a
+      )
     );
-  }
+  };
+
+  const handleCreateArticle = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!newTitle.trim() || !newBody.trim()) return;
+    const created: KBArticle = {
+      id: `kb-${Date.now().toString().slice(-4)}`,
+      title: newTitle.trim(),
+      category: newCategory,
+      body: newBody.trim(),
+      helpfulYes: 1,
+      helpfulNo: 0,
+    };
+    persist([created, ...articles]);
+    setNewTitle('');
+    setNewBody('');
+  };
+
+  const results = useMemo(() => {
+    return articles.filter(a => {
+      const matchesCat = categoryFilter === 'ALL' || a.category === categoryFilter;
+      const q = search.trim().toLowerCase();
+      const matchesSearch = !q || a.title.toLowerCase().includes(q) || a.body.toLowerCase().includes(q);
+      return matchesCat && matchesSearch;
+    });
+  }, [articles, search, categoryFilter]);
 
   return (
-    <section
-      aria-label="Knowledge Base Builder"
-      className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans"
-    >
-      <div className="max-w-7xl mx-auto space-y-6">
-        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-[#262626] pb-5">
-          <div>
-            <span className="inline-block text-xs uppercase tracking-widest text-[#D4AF37] font-semibold">
-              Agent Midas Bounty #21 • $300
-            </span>
-            <h1 className="text-2xl md:text-3xl font-bold text-[#F5F5F5] mt-1">
-              Knowledge Base Builder
-            </h1>
-            <p className="text-sm text-[#A3A3A3] mt-1">
-              Searchable knowledge base with category hierarchy, semantic relevance scoring, and helpfulness feedback
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <label htmlFor="search-input-21" className="sr-only">Search records</label>
+    <section aria-label="Knowledge Base Builder" className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans">
+      <div className="max-w-5xl mx-auto space-y-6">
+        <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-[#262626] pb-4">
+          <h1 className="text-2xl font-bold text-[#D4AF37]">Knowledge Base Builder</h1>
+          <div className="flex gap-2">
+            <label htmlFor="kb-search" className="sr-only">Search Knowledge Base</label>
             <input
-              id="search-input-21"
+              id="kb-search"
               type="search"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder="Search ID, name, category..."
-              className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search articles..."
+              className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]"
             />
-            <label htmlFor="status-filter-21" className="sr-only">Filter by status</label>
+            <label htmlFor="kb-cat-filter" className="sr-only">Category Filter</label>
             <select
-              id="status-filter-21"
-              value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value)}
-              className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+              id="kb-cat-filter"
+              value={categoryFilter}
+              onChange={e => setCategoryFilter(e.target.value)}
+              className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]"
             >
-              <option value="ALL">All Statuses</option>
-              <option value="Active">Active</option>
-              <option value="Pending">Pending</option>
-              <option value="Completed">Completed</option>
-              <option value="Compressed">Compressed</option>
+              <option value="ALL">All Categories</option>
+              <option value="Getting Started">Getting Started</option>
+              <option value="Affiliate & Billing">Affiliate & Billing</option>
+              <option value="API & Security">API & Security</option>
             </select>
-            <label htmlFor="compression-toggle-21" className="flex items-center gap-2 text-xs text-[#D4AF37] cursor-pointer">
-              <input
-                id="compression-toggle-21"
-                type="checkbox"
-                checked={enableCompression}
-                onChange={e => setEnableCompression(e.target.checked)}
-                className="accent-[#D4AF37]"
-              />
-              Dynamic Compression
-            </label>
           </div>
         </header>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Active Volume (Persisted)</p>
-            <p className="text-2xl font-bold text-[#D4AF37] mt-1">
-              ${summary.totalVolume.toLocaleString()}
-            </p>
-          </div>
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Active Nodes / Streams</p>
-            <p className="text-2xl font-bold text-[#22C55E] mt-1">
-              {summary.activeCount} / {items.length}
-            </p>
-          </div>
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Aggregate Conversion Rate</p>
-            <p className="text-2xl font-bold text-[#F5F5F5] mt-1">
-              {summary.convRate}%
-            </p>
-          </div>
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Z-Score Significance</p>
-            <p className="text-2xl font-bold text-[#3B82F6] mt-1">
-              Z = {summary.zScore} ({summary.isSignificant ? '95%+ Conf.' : 'Collecting'})
-            </p>
-          </div>
+        <div className="space-y-3">
+          {results.map(a => (
+            <article key={a.id} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-2">
+              <span className="text-xs text-[#D4AF37] font-semibold">{a.category}</span>
+              <h2 className="text-lg font-bold">{a.title}</h2>
+              <p className="text-sm text-[#A3A3A3]">{a.body}</p>
+              <div className="pt-2 flex items-center gap-3 text-xs">
+                <span className="text-[#A3A3A3]">Was this article helpful?</span>
+                <button
+                  type="button"
+                  onClick={() => voteFeedback(a.id, true)}
+                  className="px-2.5 py-1 rounded bg-[#1F1F1F] text-[#22C55E]"
+                >
+                  👍 Yes ({a.helpfulYes})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => voteFeedback(a.id, false)}
+                  className="px-2.5 py-1 rounded bg-[#1F1F1F] text-[#EF4444]"
+                >
+                  👎 No ({a.helpfulNo})
+                </button>
+              </div>
+            </article>
+          ))}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-4">
-            <h2 className="text-lg font-semibold text-[#D4AF37]">
-              Hierarchical Matrix & Pass-Up Routing ({filteredItems.length})
-            </h2>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-sm">
-                <thead>
-                  <tr className="border-b border-[#262626] text-[#A3A3A3]">
-                    <th className="py-2 pr-3">Node / Depth</th>
-                    <th className="py-2 pr-3">Name & Parent Link</th>
-                    <th className="py-2 pr-3">Pass-Up / Routing</th>
-                    <th className="py-2 pr-3">Volume</th>
-                    <th className="py-2 pr-3">Status</th>
-                    <th className="py-2">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredItems.map(item => {
-                    const effectiveDepth =
-                      enableCompression && item.parentId
-                        ? Math.max(0, item.depth - (items.find(p => p.id === item.parentId)?.status === 'Compressed' ? 1 : 0))
-                        : item.depth;
-                    const rate = item.sampleSize > 0 ? ((item.conversions / item.sampleSize) * 100).toFixed(1) : '0.0';
-                    return (
-                      <tr
-                        key={item.id}
-                        tabIndex={0}
-                        role="button"
-                        aria-pressed={selectedItem?.id === item.id}
-                        onClick={() => setSelectedId(item.id)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            setSelectedId(item.id);
-                          }
-                        }}
-                        className={`border-b border-[#1A1A1A] cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-[#D4AF37] ${
-                          selectedItem?.id === item.id ? 'bg-[#171717]' : 'hover:bg-[#121212]'
-                        }`}
-                      >
-                        <td className="py-3 pr-3 font-mono text-xs text-[#D4AF37]">
-                          <span style={{ paddingLeft: `${effectiveDepth * 12}px` }}>
-                            {effectiveDepth > 0 ? '└─ ' : ''}{item.id} (L{effectiveDepth})
-                          </span>
-                        </td>
-                        <td className="py-3 pr-3">
-                          <p className="font-medium text-[#F5F5F5]">{item.name}</p>
-                          <p className="text-xs text-[#A3A3A3]">
-                            Parent: {item.parentId ?? 'ROOT'} • Conv: {rate}% (Retry #{item.retryAttempts})
-                          </p>
-                        </td>
-                        <td className="py-3 pr-3 text-xs text-[#A3A3A3]">{item.passupRecipient}</td>
-                        <td className="py-3 pr-3 font-mono">${item.primaryMetric.toLocaleString()}</td>
-                        <td className="py-3 pr-3">
-                          <span className="px-2 py-0.5 rounded text-xs font-semibold bg-[#1F1F1F] text-[#D4AF37] border border-[#D4AF37]/40">
-                            {item.status}
-                          </span>
-                        </td>
-                        <td className="py-3">
-                          <button
-                            type="button"
-                            onClick={ev => {
-                              ev.stopPropagation();
-                              handleCycleStatus(item.id);
-                            }}
-                            className="px-2.5 py-1 rounded bg-[#D4AF37] text-[#0A0A0A] font-semibold text-xs hover:bg-[#E8C547]"
-                          >
-                            Cycle Status
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <aside className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-5">
+        <form onSubmit={handleCreateArticle} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-3">
+          <h2 className="text-base font-bold text-[#D4AF37]">Publish New Knowledge Base Article</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <h2 className="text-lg font-semibold text-[#D4AF37]">Node Inspector & Persistent Creator</h2>
-              {selectedItem && (
-                <div className="mt-3 p-3 rounded-lg bg-[#141414] border border-[#262626] space-y-1.5 text-xs">
-                  <p className="text-[#D4AF37] font-mono font-bold">
-                    {selectedItem.id} (Parent: {selectedItem.parentId ?? 'ROOT'})
-                  </p>
-                  <p className="text-sm font-semibold text-[#F5F5F5]">{selectedItem.name}</p>
-                  <p className="text-[#22C55E]">Routing: {selectedItem.passupRecipient}</p>
-                  <p className="text-[#A3A3A3]">{selectedItem.notes}</p>
-                  <p className="text-[#666666]">Updated: {selectedItem.updatedAt}</p>
-                </div>
-              )}
+              <label htmlFor="kb-new-title" className="block text-xs text-[#A3A3A3] mb-1">Article Title</label>
+              <input id="kb-new-title" type="text" required value={newTitle} onChange={e => setNewTitle(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-2 text-sm" />
             </div>
-
-            <form onSubmit={handleCreateRecord} className="space-y-3 border-t border-[#262626] pt-4">
-              <h3 className="text-sm font-semibold text-[#F5F5F5]">Add Child Node / Entry</h3>
-              <div>
-                <label htmlFor="entry-name-21" className="block text-xs text-[#A3A3A3] mb-1">
-                  Entry / Node Name
-                </label>
-                <input
-                  id="entry-name-21"
-                  type="text"
-                  required
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  placeholder="Enter node or workflow title..."
-                  className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                />
-              </div>
-              <div>
-                <label htmlFor="parent-node-21" className="block text-xs text-[#A3A3A3] mb-1">
-                  Parent Sponsor / Upstream Node
-                </label>
-                <select
-                  id="parent-node-21"
-                  value={newParentId}
-                  onChange={e => setNewParentId(e.target.value)}
-                  className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                >
-                  {items.map(i => (
-                    <option key={i.id} value={i.id}>{i.id} — {i.name.slice(0, 28)}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="entry-cat-21" className="block text-xs text-[#A3A3A3] mb-1">
-                  Category
-                </label>
-                <select
-                  id="entry-cat-21"
-                  value={newCategory}
-                  onChange={e => setNewCategory(e.target.value)}
-                  className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                >
-                  <option value="Tier-1 Production">Tier-1 Production</option>
-                  <option value="Automation">Automation</option>
-                  <option value="Optimization">Optimization</option>
-                  <option value="Compliance">Compliance</option>
-                </select>
-              </div>
-              <div>
-                <label htmlFor="entry-val-21" className="block text-xs text-[#A3A3A3] mb-1">
-                  Projected Value (USD)
-                </label>
-                <input
-                  id="entry-val-21"
-                  type="number"
-                  value={newPrimary}
-                  onChange={e => setNewPrimary(e.target.value)}
-                  className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                />
-              </div>
-              <button
-                type="submit"
-                className="w-full py-2.5 rounded-lg bg-[#D4AF37] text-[#0A0A0A] font-bold text-sm hover:bg-[#E8C547]"
-              >
-                + Launch & Persist Entry
-              </button>
-            </form>
-          </aside>
-        </div>
+            <div>
+              <label htmlFor="kb-new-cat" className="block text-xs text-[#A3A3A3] mb-1">Category</label>
+              <select id="kb-new-cat" value={newCategory} onChange={e => setNewCategory(e.target.value as KBArticle['category'])} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-2 text-sm">
+                <option value="Getting Started">Getting Started</option>
+                <option value="Affiliate & Billing">Affiliate & Billing</option>
+                <option value="API & Security">API & Security</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label htmlFor="kb-new-body" className="block text-xs text-[#A3A3A3] mb-1">Article Content</label>
+            <textarea id="kb-new-body" rows={3} required value={newBody} onChange={e => setNewBody(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-2 text-sm" />
+          </div>
+          <button type="submit" className="px-4 py-2 rounded bg-[#D4AF37] text-[#0A0A0A] font-bold text-xs">
+            + Publish Article
+          </button>
+        </form>
       </div>
     </section>
   );
