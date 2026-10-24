@@ -36,15 +36,26 @@ function detectBrowserLocale(explicitLocale?: SupportedLocale): SupportedLocale 
   return 'en-US';
 }
 
+function isValidEntry(item: any): item is TranslationEntry {
+  return (
+    item &&
+    typeof item === 'object' &&
+    typeof item.key === 'string' &&
+    item.values &&
+    typeof item.values === 'object' &&
+    typeof item.values['en-US'] === 'string'
+  );
+}
+
 const DEFAULT_ENTRIES: TranslationEntry[] = [
   {
     key: 'dashboard.welcome_user',
     namespace: 'dashboard',
     values: {
-      'en-US': 'Welcome back, {{name}}! You have {{count}} active affiliate lines.',
-      'es-ES': '¡Bienvenido de nuevo, {{name}}! Tienes {{count}} líneas de afiliados activas.',
-      'fr-FR': 'Bon retour, {{name}} ! Vous avez {{count}} lignes affiliées actives.',
-      'pt-BR': 'Bem-vindo de volta, {{name}}! Você tem {{count}} linhas de afiliados ativas.'
+      'en-US': 'Welcome back, {{name}}! {{count, plural, zero {No active affiliate lines} one {1 active affiliate line} other {# active affiliate lines}}}.',
+      'es-ES': '¡Bienvenido, {{name}}! {{count, plural, zero {Sin líneas activas} one {1 línea activa} other {# líneas activas}}}.',
+      'fr-FR': 'Bon retour, {{name}} ! {{count, plural, zero {Aucune ligne active} one {1 ligne active} other {# lignes actives}}}.',
+      'pt-BR': 'Bem-vindo, {{name}}! {{count, plural, zero {Nenhuma linha ativa} one {1 linha ativa} other {# linhas ativas}}}.'
     }
   },
   {
@@ -55,16 +66,6 @@ const DEFAULT_ENTRIES: TranslationEntry[] = [
       'es-ES': 'Próximo pago de {{amount}} programado vía Stripe.',
       'fr-FR': 'Prochain paiement de {{amount}} programmé via Stripe.',
       'pt-BR': 'Próximo pagamento de {{amount}} agendado via Stripe.'
-    }
-  },
-  {
-    key: 'common.security_verified',
-    namespace: 'common',
-    values: {
-      'en-US': '6-Layer Security Verification Passed',
-      'es-ES': 'Verificación de seguridad de 6 capas aprobada',
-      'fr-FR': 'Vérification de sécurité à 6 niveaux réussie',
-      'pt-BR': 'Verificação de segurança de 6 camadas aprovada'
     }
   }
 ];
@@ -80,7 +81,10 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
       const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) {
+          const valid = parsed.filter(isValidEntry);
+          if (valid.length > 0) return valid;
+        }
       }
     } catch {}
     return initialEntries;
@@ -88,7 +92,7 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
 
   const [activeLocale, setActiveLocale] = useState<SupportedLocale>(() => detectBrowserLocale(initialLocale));
   const [sampleName, setSampleName] = useState('Avery');
-  const [sampleCount, setSampleCount] = useState(12);
+  const [sampleCount, setSampleCount] = useState(2);
   const [sampleAmount, setSampleAmount] = useState('$1,450.00');
   const [newKey, setNewKey] = useState('');
   const [newEnValue, setNewEnValue] = useState('');
@@ -96,7 +100,7 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const saveSeqRef = useRef(0);
 
-  const persistEntries = async (next: TranslationEntry[], msg?: string) => {
+  const persistEntries = async (next: TranslationEntry[], msg?: string): Promise<boolean> => {
     const seq = ++saveSeqRef.current;
     const prev = entries;
     setEntries(next);
@@ -105,25 +109,38 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
       if (onChange) {
         await onChange(next);
       }
-      if (seq !== saveSeqRef.current) return;
+      if (seq !== saveSeqRef.current) return true;
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(storageKey, JSON.stringify(next));
       }
       if (msg) setNotice(msg);
+      return true;
     } catch {
       if (seq === saveSeqRef.current) {
         setEntries(prev);
-        setErrorMsg('Failed to persist i18n catalog; state rolled back.');
+        setErrorMsg('Failed to persist i18n catalog; state rolled back and draft preserved.');
       }
+      return false;
     }
   };
 
+  // Supports both {{count, plural, zero {...} one {...} other {...}}} and {{var}} interpolation
   const translate = (key: string, locale: SupportedLocale, vars: Record<string, string | number>) => {
     const found = entries.find(e => e.key === key);
-    if (!found) return `[missing:${key}]`;
+    if (!found || !found.values) return `[missing:${key}]`;
     const raw = found.values[locale]?.trim() || found.values['en-US'] || key;
     const usedFallback = !found.values[locale]?.trim() && locale !== 'en-US';
-    const interpolated = raw.replace(/\{\{(\w+)\}\}/g, (_, k) =>
+
+    const withPlurals = raw.replace(
+      /\{\{(\w+),\s*plural,\s*zero\s*\{([^}]*)\}\s*one\s*\{([^}]*)\}\s*other\s*\{([^}]*)\}\}\}/g,
+      (_, varName, zeroForm, oneForm, otherForm) => {
+        const num = Number(vars[varName] ?? 0);
+        const chosen = num === 0 ? zeroForm : num === 1 ? oneForm : otherForm;
+        return chosen.replace(/#/g, String(num));
+      }
+    );
+
+    const interpolated = withPlurals.replace(/\{\{(\w+)\}\}/g, (_, k) =>
       vars[k] !== undefined ? String(vars[k]) : `{{${k}}}`
     );
     return usedFallback ? `${interpolated} (fallback: en-US)` : interpolated;
@@ -136,7 +153,7 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
     void persistEntries(next, `Updated [${locale}] translation for "${key}".`);
   };
 
-  const handleAddKey = (e: React.FormEvent) => {
+  const handleAddKey = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newKey.trim() || !newEnValue.trim()) {
       setErrorMsg('Translation key and default en-US string are required.');
@@ -156,14 +173,16 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
         'pt-BR': ''
       }
     };
-    setNewKey('');
-    setNewEnValue('');
-    void persistEntries([...entries, created], `Added translation key "${created.key}".`);
+    const ok = await persistEntries([...entries, created], `Added translation key "${created.key}".`);
+    if (ok) {
+      setNewKey('');
+      setNewEnValue('');
+    }
   };
 
   const coverageByLocale = useMemo(() => {
     return LOCALES.map(l => {
-      const translated = entries.filter(e => Boolean(e.values[l.code]?.trim())).length;
+      const translated = entries.filter(e => Boolean(e.values && e.values[l.code]?.trim())).length;
       return {
         ...l,
         translated,
@@ -178,9 +197,9 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
       <div className="max-w-7xl mx-auto space-y-6">
         <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-zinc-800 pb-4">
           <div>
-            <h1 className="text-2xl font-bold text-[#D4AF37]">Agent Midas i18n Framework & Locale Inspector</h1>
+            <h1 className="text-2xl font-bold text-[#D4AF37]">Agent Midas i18n Framework & Pluralization Inspector</h1>
             <p className="text-sm text-zinc-400">
-              Dynamic locale switching, browser locale auto-detection, parameter interpolation, and fallback resolution
+              Dynamic locale switching, zero/one/other plural rules, parameter interpolation, and fallback resolution
             </p>
           </div>
           <div className="flex gap-2" role="tablist" aria-label="Active Locale Selector">
@@ -201,60 +220,33 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
           </div>
         </header>
 
-        {notice && (
-          <div role="status" className="bg-emerald-950/60 border border-emerald-700 text-emerald-200 px-4 py-2 rounded text-sm">
-            {notice}
-          </div>
-        )}
-        {errorMsg && (
-          <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">
-            {errorMsg}
-          </div>
-        )}
+        {notice && <div role="status" className="bg-emerald-950/60 border border-emerald-700 text-emerald-200 px-4 py-2 rounded text-sm">{notice}</div>}
+        {errorMsg && <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{errorMsg}</div>}
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {coverageByLocale.map(c => (
             <div key={c.code} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
               <div className="text-xs text-zinc-400">{c.label}</div>
               <div className="text-xl font-bold text-[#D4AF37] mt-1">{c.pct}% Coverage</div>
-              <div className="text-xs text-zinc-500">
-                {c.translated} / {c.total} keys translated
-              </div>
+              <div className="text-xs text-zinc-500">{c.translated} / {c.total} keys translated</div>
             </div>
           ))}
         </div>
 
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
-          <h2 className="text-base font-bold text-[#D4AF37]">
-            Live Interpolation Preview ({activeLocale})
-          </h2>
+          <h2 className="text-base font-bold text-[#D4AF37]">Live Interpolation & Plural Preview ({activeLocale})</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <label className="text-xs text-zinc-400">
               Variable {'{{name}}'}
-              <input
-                type="text"
-                value={sampleName}
-                onChange={e => setSampleName(e.target.value)}
-                className="mt-1 w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white"
-              />
+              <input type="text" value={sampleName} onChange={e => setSampleName(e.target.value)} className="mt-1 w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
             </label>
             <label className="text-xs text-zinc-400">
-              Variable {'{{count}}'}
-              <input
-                type="number"
-                value={sampleCount}
-                onChange={e => setSampleCount(Number(e.target.value))}
-                className="mt-1 w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white"
-              />
+              Plural Count {'{{count}}'} (Try 0, 1, or 2+)
+              <input type="number" min={0} value={sampleCount} onChange={e => setSampleCount(Number(e.target.value))} className="mt-1 w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
             </label>
             <label className="text-xs text-zinc-400">
               Variable {'{{amount}}'}
-              <input
-                type="text"
-                value={sampleAmount}
-                onChange={e => setSampleAmount(e.target.value)}
-                className="mt-1 w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white"
-              />
+              <input type="text" value={sampleAmount} onChange={e => setSampleAmount(e.target.value)} className="mt-1 w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
             </label>
           </div>
 
@@ -271,26 +263,9 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
         </div>
 
         <form onSubmit={handleAddKey} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap gap-3">
-          <input
-            type="text"
-            placeholder="New Key (e.g. common.save_changes)"
-            value={newKey}
-            onChange={e => setNewKey(e.target.value)}
-            className="w-64 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
-          />
-          <input
-            type="text"
-            placeholder="Default English (en-US) template"
-            value={newEnValue}
-            onChange={e => setNewEnValue(e.target.value)}
-            className="flex-1 min-w-[240px] bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
-          />
-          <button
-            type="submit"
-            className="bg-[#D4AF37] text-black font-bold text-sm px-4 py-2 rounded hover:opacity-90"
-          >
-            + Add Translation Key
-          </button>
+          <input aria-label="New Translation Key" type="text" placeholder="New Key (e.g. common.save_changes)" value={newKey} onChange={e => setNewKey(e.target.value)} className="w-64 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input aria-label="Default English Template" type="text" placeholder="Default English (en-US) template" value={newEnValue} onChange={e => setNewEnValue(e.target.value)} className="flex-1 min-w-[240px] bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <button type="submit" className="bg-[#D4AF37] text-black font-bold text-sm px-4 py-2 rounded">+ Add Translation Key</button>
         </form>
 
         <div className="space-y-3">
