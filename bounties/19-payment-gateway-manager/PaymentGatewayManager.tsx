@@ -99,7 +99,9 @@ export const PaymentGatewayManager: React.FC<PaymentGatewayManagerProps> = ({
 
   const txsRef = useRef<GatewayTransaction[]>(transactions);
   txsRef.current = transactions;
+  const inFlightLockRef = useRef(false);
 
+  const [ isProcessing, setIsProcessing ] = useState(false);
   const [customerEmail, setCustomerEmail] = useState('billing@enterprise.io');
   const [amount, setAmount] = useState('450.00');
   const [statusNotice, setStatusNotice] = useState('');
@@ -140,9 +142,14 @@ export const PaymentGatewayManager: React.FC<PaymentGatewayManagerProps> = ({
         window.localStorage.setItem(storageKey, JSON.stringify(merged));
       }
     } catch {
-      txsRef.current = prev;
-      setTransactions(prev);
-      setErrorMsg('Failed to persist transaction log to storage.');
+      if (tx.status === 'succeeded') {
+        // Never hide a live succeeded charge from the operator UI log even if persistence warns
+        setErrorMsg('Payment succeeded at gateway, but external audit persistence reported a storage warning.');
+      } else {
+        txsRef.current = prev;
+        setTransactions(prev);
+        setErrorMsg('Failed to persist transaction log to storage.');
+      }
     }
   };
 
@@ -158,6 +165,7 @@ export const PaymentGatewayManager: React.FC<PaymentGatewayManagerProps> = ({
 
   const handleRoutePayment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (inFlightLockRef.current) return;
     setErrorMsg('');
     setStatusNotice('');
     const parsedAmount = Math.round(Number(amount) * 100) / 100;
@@ -166,110 +174,115 @@ export const PaymentGatewayManager: React.FC<PaymentGatewayManagerProps> = ({
       return;
     }
 
-    const ordered = [...gateways].sort((a, b) => a.priority - b.priority);
-    const healthyCandidates = ordered.filter(g => g.healthy);
-    if (healthyCandidates.length === 0) {
-      const failedTx: GatewayTransaction = {
+    inFlightLockRef.current = true;
+    setIsProcessing(true);
+    try {
+      const ordered = [...gateways].sort((a, b) => a.priority - b.priority);
+      const healthyCandidates = ordered.filter(g => g.healthy);
+      if (healthyCandidates.length === 0) {
+        const failedTx: GatewayTransaction = {
+          id: `fail-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          customerEmail: customerEmail.trim(),
+          amount: parsedAmount,
+          routedGateway: 'None (All Outage)',
+          attempts: ordered.length,
+          mode: onExecutePayment || gatewayEndpoint ? 'live_gateway' : 'sandbox_simulation',
+          status: 'failed',
+          createdAtIso: new Date().toISOString()
+        };
+        await appendTransactionAtomically(failedTx);
+        setErrorMsg('All payment gateways are currently unhealthy; failover exhausted and logged.');
+        return;
+      }
+
+      let attempts = 0;
+      for (const candidate of ordered) {
+        attempts += 1;
+        if (!candidate.healthy) continue;
+
+        if (onExecutePayment) {
+          try {
+            const res = await onExecutePayment({
+              gatewayId: candidate.id,
+              customerEmail: customerEmail.trim(),
+              amount: parsedAmount
+            });
+            if (res.status === 'succeeded') {
+              const tx: GatewayTransaction = {
+                id: res.transactionId || `tx-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                customerEmail: customerEmail.trim(),
+                amount: parsedAmount,
+                routedGateway: candidate.name,
+                attempts,
+                mode: 'live_gateway',
+                status: 'succeeded',
+                createdAtIso: new Date().toISOString()
+              };
+              await appendTransactionAtomically(tx);
+              setStatusNotice(`Live payment succeeded via ${candidate.name} after ${attempts} attempt(s).`);
+              return;
+            }
+          } catch {
+            continue;
+          }
+        } else if (gatewayEndpoint) {
+          try {
+            const resp = await fetch(gatewayEndpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ gatewayId: candidate.id, customerEmail: customerEmail.trim(), amount: parsedAmount })
+            });
+            if (resp.ok) {
+              const tx: GatewayTransaction = {
+                id: `tx-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                customerEmail: customerEmail.trim(),
+                amount: parsedAmount,
+                routedGateway: candidate.name,
+                attempts,
+                mode: 'live_gateway',
+                status: 'succeeded',
+                createdAtIso: new Date().toISOString()
+              };
+              await appendTransactionAtomically(tx);
+              setStatusNotice(`Live gateway endpoint charge succeeded via ${candidate.name}.`);
+              return;
+            }
+          } catch {
+            continue;
+          }
+        } else {
+          const tx: GatewayTransaction = {
+            id: `sim-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            customerEmail: customerEmail.trim(),
+            amount: parsedAmount,
+            routedGateway: candidate.name,
+            attempts,
+            mode: 'sandbox_simulation',
+            status: 'simulated',
+            createdAtIso: new Date().toISOString()
+          };
+          await appendTransactionAtomically(tx);
+          setStatusNotice(`Sandbox Routing Simulation: selected ${candidate.name} (attempt #${attempts}).`);
+          return;
+        }
+      }
+
+      const exhaustedTx: GatewayTransaction = {
         id: `fail-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         customerEmail: customerEmail.trim(),
         amount: parsedAmount,
-        routedGateway: 'None (All Outage)',
-        attempts: ordered.length,
-        mode: onExecutePayment || gatewayEndpoint ? 'live_gateway' : 'sandbox_simulation',
+        routedGateway: 'Exhausted',
+        attempts,
+        mode: 'live_gateway',
         status: 'failed',
         createdAtIso: new Date().toISOString()
       };
-      await appendTransactionAtomically(failedTx);
-      setErrorMsg('All payment gateways are currently unhealthy; failover exhausted and logged.');
-      return;
+      await appendTransactionAtomically(exhaustedTx);
+      setErrorMsg('All healthy gateways rejected the payment request; failure logged.');
+    } finally {
+      inFlightLockRef.current = false;
+      setIsProcessing(false);
     }
-
-    let attempts = 0;
-    for (const candidate of ordered) {
-      attempts += 1;
-      if (!candidate.healthy) continue;
-
-      if (onExecutePayment) {
-        try {
-          const res = await onExecutePayment({
-            gatewayId: candidate.id,
-            customerEmail: customerEmail.trim(),
-            amount: parsedAmount
-          });
-          if (res.status === 'succeeded') {
-            const tx: GatewayTransaction = {
-              id: res.transactionId || `tx-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-              customerEmail: customerEmail.trim(),
-              amount: parsedAmount,
-              routedGateway: candidate.name,
-              attempts,
-              mode: 'live_gateway',
-              status: 'succeeded',
-              createdAtIso: new Date().toISOString()
-            };
-            await appendTransactionAtomically(tx);
-            setStatusNotice(`Live payment succeeded via ${candidate.name} after ${attempts} attempt(s).`);
-            return;
-          }
-        } catch {
-          continue;
-        }
-      } else if (gatewayEndpoint) {
-        try {
-          const resp = await fetch(gatewayEndpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gatewayId: candidate.id, customerEmail: customerEmail.trim(), amount: parsedAmount })
-          });
-          if (resp.ok) {
-            const tx: GatewayTransaction = {
-              id: `tx-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-              customerEmail: customerEmail.trim(),
-              amount: parsedAmount,
-              routedGateway: candidate.name,
-              attempts,
-              mode: 'live_gateway',
-              status: 'succeeded',
-              createdAtIso: new Date().toISOString()
-            };
-            await appendTransactionAtomically(tx);
-            setStatusNotice(`Live gateway endpoint charge succeeded via ${candidate.name}.`);
-            return;
-          }
-        } catch {
-          continue;
-        }
-      } else {
-        const tx: GatewayTransaction = {
-          id: `sim-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          customerEmail: customerEmail.trim(),
-          amount: parsedAmount,
-          routedGateway: candidate.name,
-          attempts,
-          mode: 'sandbox_simulation',
-          status: 'simulated',
-          createdAtIso: new Date().toISOString()
-        };
-        await appendTransactionAtomically(tx);
-        setStatusNotice(
-          `Sandbox Routing Simulation: selected ${candidate.name} (attempt #${attempts}).`
-        );
-        return;
-      }
-    }
-
-    const exhaustedTx: GatewayTransaction = {
-      id: `fail-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      customerEmail: customerEmail.trim(),
-      amount: parsedAmount,
-      routedGateway: 'Exhausted',
-      attempts,
-      mode: 'live_gateway',
-      status: 'failed',
-      createdAtIso: new Date().toISOString()
-    };
-    await appendTransactionAtomically(exhaustedTx);
-    setErrorMsg('All healthy gateways rejected the payment request; failure logged.');
   };
 
   return (
@@ -293,6 +306,7 @@ export const PaymentGatewayManager: React.FC<PaymentGatewayManagerProps> = ({
               </div>
               <button
                 type="button"
+                disabled={isProcessing}
                 onClick={() => toggleGatewayHealth(g.id)}
                 className={`px-3 py-1 rounded text-xs font-bold ${
                   g.healthy ? 'bg-emerald-950 text-emerald-300 border border-emerald-700' : 'bg-red-950 text-red-300 border border-red-700'
@@ -305,10 +319,10 @@ export const PaymentGatewayManager: React.FC<PaymentGatewayManagerProps> = ({
         </div>
 
         <form onSubmit={handleRoutePayment} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap gap-3">
-          <input type="email" value={customerEmail} onChange={e => setCustomerEmail(e.target.value)} placeholder="Customer Email" className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
-          <input type="number" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} placeholder="Amount ($)" className="w-40 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
-          <button type="submit" className="bg-[#D4AF37] text-black font-bold text-sm px-5 py-2 rounded">
-            {onExecutePayment || gatewayEndpoint ? 'Execute Live Gateway Charge' : 'Simulate Failover Routing'}
+          <input aria-label="Customer Email" type="email" value={customerEmail} onChange={e => setCustomerEmail(e.target.value)} placeholder="Customer Email" className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input aria-label="Payment Amount" type="number" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} placeholder="Amount ($)" className="w-40 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <button type="submit" disabled={isProcessing} className="bg-[#D4AF37] text-black font-bold text-sm px-5 py-2 rounded disabled:opacity-50">
+            {isProcessing ? 'Processing Charge...' : onExecutePayment || gatewayEndpoint ? 'Execute Live Gateway Charge' : 'Simulate Failover Routing'}
           </button>
         </form>
 
