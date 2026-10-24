@@ -98,22 +98,29 @@ export const FunnelVisualizer: React.FC<FunnelVisualizerProps> = ({
 
   const handleAddStage = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!newStageName.trim() || !newStageCount.trim()) {
+      setErrorMsg('Stage name and visitor count are required.');
+      return;
+    }
     const parsedCount = Number(newStageCount);
-    if (!newStageName.trim() || Number.isNaN(parsedCount) || parsedCount < 0) {
-      setErrorMsg('Stage name and a non-negative count are required.');
+    if (!Number.isInteger(parsedCount) || parsedCount < 0) {
+      setErrorMsg('Visitor count must be a non-negative whole integer.');
       return;
     }
     const created: FunnelStage = {
       id: `stg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       name: newStageName.trim(),
-      count: Math.round(parsedCount)
+      count: parsedCount
     };
     setNewStageName('');
     void persistStages([...stages, created], `Added funnel stage "${created.name}".`);
   };
 
   const updateStage = (id: string, patch: Partial<FunnelStage>) => {
-    if (patch.count !== undefined && (Number.isNaN(patch.count) || patch.count < 0)) return;
+    if (patch.count !== undefined && (!Number.isInteger(patch.count) || patch.count < 0)) {
+      setErrorMsg('Stage visitor count must be a non-negative whole integer.');
+      return;
+    }
     const next = stages.map(s => (s.id === id ? { ...s, ...patch } : s));
     void persistStages(next, 'Updated funnel stage.');
   };
@@ -172,22 +179,31 @@ export const FunnelVisualizer: React.FC<FunnelVisualizerProps> = ({
           </div>
         )}
 
-        <form onSubmit={handleAddStage} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap gap-3">
-          <input
-            type="text"
-            placeholder="New Funnel Stage Name"
-            value={newStageName}
-            onChange={e => setNewStageName(e.target.value)}
-            className="flex-1 min-w-[220px] bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
-          />
-          <input
-            type="number"
-            min={0}
-            placeholder="Visitor Count"
-            value={newStageCount}
-            onChange={e => setNewStageCount(e.target.value)}
-            className="w-40 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
-          />
+        <form onSubmit={handleAddStage} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap items-end gap-3">
+          <label className="flex-1 min-w-[220px] text-xs text-zinc-300">
+            New Funnel Stage Name
+            <input
+              type="text"
+              aria-label="New Funnel Stage Name"
+              placeholder="e.g. 6. Annual Upgrade"
+              value={newStageName}
+              onChange={e => setNewStageName(e.target.value)}
+              className="mt-1 w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
+            />
+          </label>
+          <label className="w-44 text-xs text-zinc-300">
+            Visitor Count
+            <input
+              type="number"
+              step="1"
+              min={0}
+              aria-label="New Funnel Stage Visitor Count"
+              placeholder="300"
+              value={newStageCount}
+              onChange={e => setNewStageCount(e.target.value)}
+              className="mt-1 w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
+            />
+          </label>
           <button
             type="submit"
             className="bg-[#D4AF37] text-black font-bold text-sm px-4 py-2 rounded hover:opacity-90"
@@ -212,10 +228,15 @@ export const FunnelVisualizer: React.FC<FunnelVisualizerProps> = ({
                     />
                     <input
                       type="number"
-                      aria-label={`Stage ${idx + 1} Count`}
+                      step="1"
+                      aria-label={`Stage ${idx + 1} Visitor Count`}
                       min={0}
                       value={st.count}
-                      onChange={e => updateStage(st.id, { count: Number(e.target.value) })}
+                      onChange={e => {
+                        const raw = e.target.value;
+                        if (!raw.trim()) return;
+                        updateStage(st.id, { count: Number(raw) });
+                      }}
                       className="w-28 bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1 text-sm font-mono text-[#D4AF37]"
                     />
                   </div>
