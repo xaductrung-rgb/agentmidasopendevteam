@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+'use client';
+import React, { useState, useMemo, useRef } from 'react';
 
 export interface MenuItem {
   id: string;
@@ -32,7 +33,7 @@ export interface RestaurantPOSProps {
 }
 
 const roundCents = (val: number) => Math.round(val * 100) / 100;
-const TAX_RATE = 0.085;
+const TAX_RATE = 0.08875; // 8.875% tax
 
 const DEFAULT_MENU: MenuItem[] = [
   { id: 'm-1', name: 'Wagyu Truffle Sliders', category: 'Starters', price: 18.5, available: true },
@@ -52,7 +53,7 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
       const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed && Array.isArray(parsed.menu) && parsed.menu.length > 0) return parsed.menu;
+        if (parsed && Array.isArray(parsed.menu)) return parsed.menu;
       }
     } catch {}
     return initialMenu;
@@ -77,24 +78,31 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
   const [itemPrice, setItemPrice] = useState('');
   const [itemCategory, setItemCategory] = useState<MenuItem['category']>('Mains');
   const [errorMsg, setErrorMsg] = useState('');
+  const saveSeqRef = useRef(0);
 
-  const persistPosState = async (nextMenu: MenuItem[], nextOrders: SettledOrder[]) => {
+  const persistPosState = async (nextMenu: MenuItem[], nextOrders: SettledOrder[]): Promise<boolean> => {
+    const seq = ++saveSeqRef.current;
     const prevMenu = menu;
     const prevOrders = settledOrders;
     setMenu(nextMenu);
     setSettledOrders(nextOrders);
     setErrorMsg('');
     try {
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify({ menu: nextMenu, orders: nextOrders }));
-      }
       if (onChange) {
         await onChange({ menu: nextMenu, orders: nextOrders });
       }
+      if (seq !== saveSeqRef.current) return true;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify({ menu: nextMenu, orders: nextOrders }));
+      }
+      return true;
     } catch {
-      setMenu(prevMenu);
-      setSettledOrders(prevOrders);
-      setErrorMsg('Failed to save POS state; rolled back.');
+      if (seq === saveSeqRef.current) {
+        setMenu(prevMenu);
+        setSettledOrders(prevOrders);
+        setErrorMsg('Failed to save POS state; rolled back.');
+      }
+      return false;
     }
   };
 
@@ -130,7 +138,7 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
     );
   };
 
-  const handleSaveMenuItem = (e: React.FormEvent) => {
+  const handleSaveMenuItem = async (e: React.FormEvent) => {
     e.preventDefault();
     const parsedPrice = roundCents(Number(itemPrice));
     if (!itemName.trim() || Number.isNaN(parsedPrice) || parsedPrice <= 0) {
@@ -142,16 +150,18 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
       nextMenu = menu.map(m =>
         m.id === editingId ? { ...m, name: itemName.trim(), price: parsedPrice, category: itemCategory } : m
       );
-      setEditingId(null);
     } else {
       nextMenu = [
         ...menu,
-        { id: `m-${Date.now()}`, name: itemName.trim(), category: itemCategory, price: parsedPrice, available: true }
+        { id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, name: itemName.trim(), category: itemCategory, price: parsedPrice, available: true }
       ];
     }
-    setItemName('');
-    setItemPrice('');
-    void persistPosState(nextMenu, settledOrders);
+    const ok = await persistPosState(nextMenu, settledOrders);
+    if (ok) {
+      setEditingId(null);
+      setItemName('');
+      setItemPrice('');
+    }
   };
 
   const startEditItem = (item: MenuItem) => {
@@ -165,10 +175,10 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
     void persistPosState(menu.filter(m => m.id !== id), settledOrders);
   };
 
-  const settleTicket = () => {
+  const settleTicket = async () => {
     if (cart.length === 0) return;
     const order: SettledOrder = {
-      id: `ORD-${1001 + settledOrders.length}`,
+      id: `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
       tableNumber,
       lines: cart,
       subtotal: ticketTotals.subtotal,
@@ -176,8 +186,10 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
       total: ticketTotals.total,
       settledAtIso: new Date().toISOString().slice(11, 19) + ' UTC'
     };
-    setCart([]);
-    void persistPosState(menu, [order, ...settledOrders]);
+    const ok = await persistPosState(menu, [order, ...settledOrders]);
+    if (ok) {
+      setCart([]);
+    }
   };
 
   return (
@@ -186,7 +198,7 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
         <header className="flex justify-between items-center border-b border-zinc-800 pb-4">
           <div>
             <h1 className="text-2xl font-bold text-[#D4AF37]">Restaurant POS & Kitchen Dispatch Terminal</h1>
-            <p className="text-sm text-zinc-400">Menu CRUD editing, itemized tax calculation, and settled kitchen order log</p>
+            <p className="text-sm text-zinc-400">Menu CRUD editing, 8.875% tax calculation, and settled kitchen order log</p>
           </div>
           <select
             aria-label="Select Active Table"
@@ -207,29 +219,11 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Menu Grid + Inline Editor */}
           <div className="lg:col-span-2 space-y-4">
             <form onSubmit={handleSaveMenuItem} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap gap-2">
-              <input
-                type="text"
-                placeholder="Menu Item Name"
-                value={itemName}
-                onChange={e => setItemName(e.target.value)}
-                className="flex-1 min-w-[160px] bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
-              />
-              <input
-                type="number"
-                step="0.01"
-                placeholder="Price ($)"
-                value={itemPrice}
-                onChange={e => setItemPrice(e.target.value)}
-                className="w-28 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
-              />
-              <select
-                value={itemCategory}
-                onChange={e => setItemCategory(e.target.value as MenuItem['category'])}
-                className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
-              >
+              <input type="text" placeholder="Menu Item Name" value={itemName} onChange={e => setItemName(e.target.value)} className="flex-1 min-w-[160px] bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+              <input type="number" step="0.01" placeholder="Price ($)" value={itemPrice} onChange={e => setItemPrice(e.target.value)} className="w-28 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+              <select value={itemCategory} onChange={e => setItemCategory(e.target.value as MenuItem['category'])} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white">
                 {(['Starters', 'Mains', 'Drinks', 'Desserts'] as const).map(c => (
                   <option key={c} value={c}>{c}</option>
                 ))}
@@ -237,19 +231,6 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
               <button type="submit" className="bg-[#D4AF37] text-black font-bold text-xs px-4 py-1.5 rounded">
                 {editingId ? 'Save Item Edit' : '+ Add Menu Item'}
               </button>
-              {editingId && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingId(null);
-                    setItemName('');
-                    setItemPrice('');
-                  }}
-                  className="bg-zinc-800 text-zinc-300 text-xs px-3 py-1.5 rounded"
-                >
-                  Cancel
-                </button>
-              )}
             </form>
 
             <div className="flex gap-2" role="tablist">
@@ -278,34 +259,15 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
                     <div className="text-sm font-mono text-zinc-300">${item.price.toFixed(2)}</div>
                   </div>
                   <div className="flex gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => addToTicket(item)}
-                      className="px-3 py-1.5 rounded bg-[#D4AF37] text-black font-bold text-xs"
-                    >
-                      + Order
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => startEditItem(item)}
-                      className="px-2.5 py-1.5 rounded bg-zinc-800 text-zinc-200 text-xs"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => deleteMenuItem(item.id)}
-                      className="px-2.5 py-1.5 rounded bg-red-950 text-red-300 text-xs"
-                    >
-                      ✕
-                    </button>
+                    <button type="button" onClick={() => addToTicket(item)} className="px-3 py-1.5 rounded bg-[#D4AF37] text-black font-bold text-xs">+ Order</button>
+                    <button type="button" onClick={() => startEditItem(item)} className="px-2.5 py-1.5 rounded bg-zinc-800 text-zinc-200 text-xs">Edit</button>
+                    <button type="button" onClick={() => deleteMenuItem(item.id)} className="px-2.5 py-1.5 rounded bg-red-950 text-red-300 text-xs">✕</button>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Active Ticket & Recent Settled Kitchen Dispatches */}
           <div className="space-y-6">
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
               <h2 className="text-lg font-bold text-[#D4AF37]">Active Ticket — {tableNumber}</h2>
@@ -323,9 +285,7 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
                         <button type="button" onClick={() => adjustQty(line.itemId, -1)} className="px-2 py-0.5 bg-zinc-800 rounded">-</button>
                         <span className="font-mono font-bold">{line.quantity}</span>
                         <button type="button" onClick={() => adjustQty(line.itemId, 1)} className="px-2 py-0.5 bg-zinc-800 rounded">+</button>
-                        <span className="font-mono text-[#D4AF37] w-16 text-right">
-                          ${roundCents(line.unitPrice * line.quantity).toFixed(2)}
-                        </span>
+                        <span className="font-mono text-[#D4AF37] w-16 text-right">${roundCents(line.unitPrice * line.quantity).toFixed(2)}</span>
                       </div>
                     </div>
                   ))}
@@ -338,7 +298,7 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
                   <span className="font-mono">${ticketTotals.subtotal.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-zinc-400">
-                  <span>Sales Tax (8.5%)</span>
+                  <span>Sales Tax (8.875%)</span>
                   <span className="font-mono">${ticketTotals.tax.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-base font-bold text-[#D4AF37] pt-1 border-t border-zinc-800">
@@ -350,34 +310,27 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
               <button
                 type="button"
                 disabled={cart.length === 0}
-                onClick={settleTicket}
+                onClick={() => void settleTicket()}
                 className="w-full py-2.5 rounded-lg bg-[#D4AF37] text-black font-bold text-sm disabled:opacity-40"
               >
                 Dispatch to Kitchen & Settle (${ticketTotals.total.toFixed(2)})
               </button>
             </div>
 
-            {/* Settled Kitchen Dispatches */}
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
               <h3 className="text-sm font-bold text-[#D4AF37]">Recent Kitchen Dispatches ({settledOrders.length})</h3>
-              {settledOrders.length === 0 ? (
-                <p className="text-xs text-zinc-500">No settled orders dispatched yet.</p>
-              ) : (
-                <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {settledOrders.map(ord => (
-                    <div key={ord.id} className="bg-zinc-950 border border-zinc-800 rounded p-3 text-xs space-y-1">
-                      <div className="flex justify-between font-bold text-[#D4AF37]">
-                        <span>{ord.id} · {ord.tableNumber}</span>
-                        <span>{ord.settledAtIso}</span>
-                      </div>
-                      <div className="text-zinc-400">
-                        Subtotal: ${ord.subtotal.toFixed(2)} · Tax: ${ord.tax.toFixed(2)} ·{' '}
-                        <strong className="text-emerald-400">Total: ${ord.total.toFixed(2)}</strong>
-                      </div>
-                    </div>
-                  ))}
+              {settledOrders.map(ord => (
+                <div key={ord.id} className="bg-zinc-950 border border-zinc-800 rounded p-3 text-xs space-y-1">
+                  <div className="flex justify-between font-bold text-[#D4AF37]">
+                    <span>{ord.id} · {ord.tableNumber}</span>
+                    <span>{ord.settledAtIso}</span>
+                  </div>
+                  <div className="text-zinc-400">
+                    Subtotal: ${ord.subtotal.toFixed(2)} · Tax: ${ord.tax.toFixed(2)} ·{' '}
+                    <strong className="text-emerald-400">Total: ${ord.total.toFixed(2)}</strong>
+                  </div>
                 </div>
-              )}
+              ))}
             </div>
           </div>
         </div>
