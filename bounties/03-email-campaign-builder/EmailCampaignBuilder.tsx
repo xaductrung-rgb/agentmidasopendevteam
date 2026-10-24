@@ -1,129 +1,198 @@
-'use client';
-
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 
 export interface EmailCampaign {
   id: string;
-  subject: string;
-  headlineBlock: string;
-  ctaText: string;
+  name: string;
+  subjectLine: string;
+  segment: string;
+  htmlBody: string;
   scheduledAt: string;
+  status: 'Queued' | 'Dispatched';
   sentCount: number;
-  openRate: number;
-  clickRate: number;
-  status: 'Scheduled' | 'Sent';
+  openCount: number;
+  clickCount: number;
+}
+
+export interface EmailCampaignBuilderProps {
+  storageKey?: string;
+  dispatchEndpoint?: string;
+  onDispatchCampaign?: (campaign: EmailCampaign) => Promise<{ sentCount?: number }>;
+  onChange?: (campaigns: EmailCampaign[]) => void | Promise<void>;
 }
 
 const DEFAULT_CAMPAIGNS: EmailCampaign[] = [
   {
-    id: 'em-1',
-    subject: 'Unlock Your 75% Agent Midas Partner Commission',
-    headlineBlock: 'Scale recurring revenue with Two-Up automated attribution.',
-    ctaText: 'Activate Partner Portal',
-    scheduledAt: '2026-10-25T10:00',
-    sentCount: 4200,
-    openRate: 48.5,
-    clickRate: 14.2,
-    status: 'Sent',
-  },
+    id: 'cmp-101',
+    name: 'October Affiliate Tier Upgrade Announcement',
+    subjectLine: 'Unlock 50% Two-Up Commissions This Quarter',
+    segment: 'Active Affiliates',
+    htmlBody: '<h1>Hello {{first_name}}</h1><p>Your Two-Up dashboard is live.</p>',
+    scheduledAt: '2026-10-28T14:00',
+    status: 'Dispatched',
+    sentCount: 1420,
+    openCount: 610,
+    clickCount: 195
+  }
 ];
 
-const STORAGE_KEY = 'agentmidas_email_campaigns_v2';
-
-export function EmailCampaignBuilder() {
-  const [campaigns, setCampaigns] = useState<EmailCampaign[]>(DEFAULT_CAMPAIGNS);
-  const [subject, setSubject] = useState<string>('Q4 Enterprise AI Launch Sequence');
-  const [headlineBlock, setHeadlineBlock] = useState<string>('Deploy autonomous agents across your CRM in 60 seconds.');
-  const [ctaText, setCtaText] = useState<string>('Claim Free Sandbox');
-  const [scheduledAt, setScheduledAt] = useState<string>('2026-10-26T14:00');
-
-  useEffect(() => {
+export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
+  storageKey = 'agentmidas_email_campaigns_v2',
+  dispatchEndpoint,
+  onDispatchCampaign,
+  onChange
+}) => {
+  const [campaigns, setCampaigns] = useState<EmailCampaign[]>(() => {
     try {
-      const saved = window.localStorage.getItem(STORAGE_KEY);
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
       if (saved) {
-        const parsed = JSON.parse(saved) as EmailCampaign[];
-        if (Array.isArray(parsed) && parsed.length > 0) setCampaigns(parsed);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch {}
-  }, []);
+    return DEFAULT_CAMPAIGNS;
+  });
 
-  const handleScheduleCampaign = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!subject.trim()) return;
-    const created: EmailCampaign = {
-      id: `em-${Date.now().toString().slice(-4)}`,
-      subject: subject.trim(),
-      headlineBlock: headlineBlock.trim(),
-      ctaText: ctaText.trim(),
-      scheduledAt,
-      sentCount: 1500,
-      openRate: 44.0,
-      clickRate: 12.8,
-      status: 'Scheduled',
-    };
-    const next = [created, ...campaigns];
+  const [name, setName] = useState('');
+  const [subjectLine, setSubjectLine] = useState('');
+  const [segment, setSegment] = useState('All Subscribers');
+  const [htmlBody, setHtmlBody] = useState('<h1>Agent Midas Update</h1><p>Exclusive partner insights.</p>');
+  const [scheduledAt, setScheduledAt] = useState('2026-11-01T09:00');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const persistCampaigns = async (next: EmailCampaign[], msg?: string) => {
+    const prev = campaigns;
     setCampaigns(next);
+    setErrorMsg('');
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch {}
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
+      if (onChange) {
+        await onChange(next);
+      }
+      if (msg) setNotice(msg);
+    } catch {
+      setCampaigns(prev);
+      setErrorMsg('Failed to persist campaign queue; rolled back.');
+    }
+  };
+
+  const handleScheduleCampaign = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !subjectLine.trim() || !scheduledAt.trim()) {
+      setErrorMsg('Campaign name, subject line, and a valid schedule timestamp are required.');
+      return;
+    }
+    const parsedTime = Date.parse(scheduledAt);
+    if (Number.isNaN(parsedTime)) {
+      setErrorMsg('Invalid schedule date/time format.');
+      return;
+    }
+
+    const created: EmailCampaign = {
+      id: `cmp-${Date.now()}`,
+      name: name.trim(),
+      subjectLine: subjectLine.trim(),
+      segment,
+      htmlBody,
+      scheduledAt: scheduledAt.trim(),
+      status: 'Queued',
+      sentCount: 0,
+      openCount: 0,
+      clickCount: 0
+    };
+
+    if (onDispatchCampaign) {
+      try {
+        const res = await onDispatchCampaign(created);
+        created.status = 'Dispatched';
+        created.sentCount = res?.sentCount ?? 0;
+      } catch {
+        setErrorMsg('Live ESP dispatch callback failed.');
+        return;
+      }
+    } else if (dispatchEndpoint) {
+      try {
+        const resp = await fetch(dispatchEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(created)
+        });
+        if (!resp.ok) throw new Error('ESP HTTP error');
+        created.status = 'Dispatched';
+      } catch {
+        setErrorMsg('Live ESP dispatch endpoint failed.');
+        return;
+      }
+    }
+
+    setName('');
+    setSubjectLine('');
+    await persistCampaigns(
+      [created, ...campaigns],
+      created.status === 'Dispatched'
+        ? 'Campaign dispatched via configured ESP handler.'
+        : 'Campaign queued locally with 0 initial delivery metrics until dispatched.'
+    );
   };
 
   return (
-    <section aria-label="Email Campaign Builder" className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans">
-      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <form onSubmit={handleScheduleCampaign} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-4">
-          <h1 className="text-2xl font-bold text-[#D4AF37]">Email Campaign Builder</h1>
-          <div>
-            <label htmlFor="em-subject" className="block text-xs text-[#A3A3A3] mb-1">Subject Line</label>
-            <input id="em-subject" type="text" required value={subject} onChange={e => setSubject(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]" />
+    <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
+      <div className="max-w-6xl mx-auto space-y-6">
+        <header className="border-b border-zinc-800 pb-4">
+          <h1 className="text-2xl font-bold text-[#D4AF37]">Email Campaign Template Builder & Schedule Queue</h1>
+          <p className="text-sm text-zinc-400">
+            {onDispatchCampaign || dispatchEndpoint
+              ? 'Connected to Live ESP Dispatch Provider'
+              : 'Local Campaign Queue Mode (connect onDispatchCampaign or dispatchEndpoint for live SMTP/ESP delivery)'}
+          </p>
+        </header>
+
+        {notice && <div role="status" className="bg-emerald-950/60 border border-emerald-700 text-emerald-200 px-4 py-2 rounded text-sm">{notice}</div>}
+        {errorMsg && <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{errorMsg}</div>}
+
+        <form onSubmit={handleScheduleCampaign} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="Campaign Name" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+            <input value={subjectLine} onChange={e => setSubjectLine(e.target.value)} placeholder="Email Subject Line" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+            <select value={segment} onChange={e => setSegment(e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white">
+              <option value="All Subscribers">All Subscribers</option>
+              <option value="Active Affiliates">Active Affiliates</option>
+              <option value="Enterprise Leads">Enterprise Leads</option>
+            </select>
+            <input type="datetime-local" value={scheduledAt} onChange={e => setScheduledAt(e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
           </div>
-          <div>
-            <label htmlFor="em-headline" className="block text-xs text-[#A3A3A3] mb-1">Hero Body Copy Block</label>
-            <textarea id="em-headline" rows={3} value={headlineBlock} onChange={e => setHeadlineBlock(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label htmlFor="em-cta" className="block text-xs text-[#A3A3A3] mb-1">CTA Button Label</label>
-              <input id="em-cta" type="text" value={ctaText} onChange={e => setCtaText(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]" />
-            </div>
-            <div>
-              <label htmlFor="em-schedule" className="block text-xs text-[#A3A3A3] mb-1">Send Schedule</label>
-              <input id="em-schedule" type="datetime-local" value={scheduledAt} onChange={e => setScheduledAt(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]" />
-            </div>
-          </div>
-          <button type="submit" className="w-full py-2.5 rounded-lg bg-[#D4AF37] text-[#0A0A0A] font-bold text-sm">
-            Schedule & Save Campaign
+          <textarea rows={3} value={htmlBody} onChange={e => setHtmlBody(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded p-3 text-sm font-mono text-zinc-200" />
+          <button type="submit" className="bg-[#D4AF37] text-black font-bold text-sm px-5 py-2 rounded">
+            Queue / Dispatch Campaign
           </button>
         </form>
 
-        <div className="space-y-4">
-          <div className="bg-[#0D0D0D] border border-[#D4AF37]/50 rounded-xl p-5 space-y-3">
-            <p className="text-xs uppercase text-[#D4AF37]">Live Visual Template Preview</p>
-            <h2 className="text-lg font-bold">{subject}</h2>
-            <p className="text-sm text-[#A3A3A3]">{headlineBlock}</p>
-            <span className="inline-block px-4 py-2 rounded bg-[#D4AF37] text-[#0A0A0A] font-bold text-xs">
-              {ctaText}
-            </span>
-          </div>
-
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-2">
-            <h3 className="text-sm font-semibold text-[#D4AF37]">Campaign Analytics & Queue ({campaigns.length})</h3>
-            {campaigns.map(c => (
-              <div key={c.id} className="p-3 rounded bg-[#141414] border border-[#262626] flex justify-between items-center text-xs">
+        <div className="space-y-3">
+          {campaigns.map(c => {
+            const safeSchedule = typeof c.scheduledAt === 'string' && c.scheduledAt ? c.scheduledAt.replace('T', ' ') : 'Unscheduled';
+            return (
+              <div key={c.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex justify-between items-center">
                 <div>
-                  <p className="font-bold text-[#F5F5F5]">{c.subject}</p>
-                  <p className="text-[#A3A3A3]">{c.status} • {c.scheduledAt.replace('T', ' ')}</p>
+                  <div className="font-bold text-white">{c.name}</div>
+                  <div className="text-xs text-zinc-400">
+                    Subject: "{c.subjectLine}" · Segment: {c.segment} · Scheduled: {safeSchedule}
+                  </div>
                 </div>
-                <div className="text-right font-mono text-[#22C55E]">
-                  Open {c.openRate}% • Click {c.clickRate}%
+                <div className="text-xs text-right">
+                  <span className="px-2 py-0.5 rounded bg-zinc-800 text-[#D4AF37] font-bold">{c.status}</span>
+                  <div className="text-zinc-400 mt-1">
+                    Sent: {c.sentCount ?? 0} · Opens: {c.openCount ?? 0} · Clicks: {c.clickCount ?? 0}
+                  </div>
                 </div>
               </div>
-            ))}
-          </div>
+            );
+          })}
         </div>
       </div>
-    </section>
+    </div>
   );
-}
+};
 
 export default EmailCampaignBuilder;
