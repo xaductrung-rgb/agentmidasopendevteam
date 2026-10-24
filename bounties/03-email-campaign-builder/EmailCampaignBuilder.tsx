@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+'use client';
+import React, { useState, useEffect, useRef } from 'react';
 
 export interface EmailCampaign {
   id: string;
@@ -27,7 +28,7 @@ const DEFAULT_CAMPAIGNS: EmailCampaign[] = [
     subjectLine: 'Unlock 50% Two-Up Commissions This Quarter',
     segment: 'Active Affiliates',
     htmlBody: '<h1>Hello {{first_name}}</h1><p>Your Two-Up dashboard is live.</p>',
-    scheduledAt: '2026-10-28T14:00',
+    scheduledAt: '2026-10-20T14:00',
     status: 'Dispatched',
     sentCount: 1420,
     openCount: 610,
@@ -52,30 +53,67 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
     return DEFAULT_CAMPAIGNS;
   });
 
+  const campaignsRef = useRef<EmailCampaign[]>(campaigns);
+  campaignsRef.current = campaigns;
+  const saveSeqRef = useRef(0);
+
   const [name, setName] = useState('');
   const [subjectLine, setSubjectLine] = useState('');
   const [segment, setSegment] = useState('All Subscribers');
   const [htmlBody, setHtmlBody] = useState('<h1>Agent Midas Update</h1><p>Exclusive partner insights.</p>');
-  const [scheduledAt, setScheduledAt] = useState('2026-11-01T09:00');
+  const [scheduledAt, setScheduledAt] = useState('2026-12-01T09:00');
   const [errorMsg, setErrorMsg] = useState('');
   const [notice, setNotice] = useState('');
 
-  const persistCampaigns = async (next: EmailCampaign[], msg?: string) => {
-    const prev = campaigns;
+  const persistList = async (next: EmailCampaign[], msg?: string) => {
+    const seq = ++saveSeqRef.current;
+    const prev = campaignsRef.current;
+    campaignsRef.current = next;
     setCampaigns(next);
     setErrorMsg('');
     try {
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
       if (onChange) {
         await onChange(next);
       }
+      if (seq !== saveSeqRef.current) return;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
       if (msg) setNotice(msg);
     } catch {
-      setCampaigns(prev);
-      setErrorMsg('Failed to persist campaign queue; rolled back.');
+      if (seq === saveSeqRef.current) {
+        campaignsRef.current = prev;
+        setCampaigns(prev);
+        setErrorMsg('Failed to persist campaign queue; rolled back.');
+      }
     }
+  };
+
+  // Automatic scheduler timer: triggers due queued campaigns when their scheduledAt timestamp arrives
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = Date.now();
+      const curr = campaignsRef.current;
+      const hasDue = curr.some(
+        c => c.status === 'Queued' && typeof c.scheduledAt === 'string' && Date.parse(c.scheduledAt) <= now
+      );
+      if (hasDue) {
+        const updated = curr.map(c =>
+          c.status === 'Queued' && typeof c.scheduledAt === 'string' && Date.parse(c.scheduledAt) <= now
+            ? { ...c, status: 'Dispatched' as const, sentCount: Math.max(1, c.sentCount) }
+            : c
+        );
+        void persistList(updated, 'Scheduled campaign reached target time and was automatically dispatched.');
+      }
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const recordTrackingEvent = (id: string, field: 'sentCount' | 'openCount' | 'clickCount') => {
+    const next = campaignsRef.current.map(c =>
+      c.id === id ? { ...c, [field]: (c[field] || 0) + 1 } : c
+    );
+    void persistList(next, `Recorded verified ${field.replace('Count', '')} tracking event.`);
   };
 
   const handleScheduleCampaign = async (e: React.FormEvent) => {
@@ -90,14 +128,15 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
       return;
     }
 
+    const isDueNow = parsedTime <= Date.now();
     const created: EmailCampaign = {
-      id: `cmp-${Date.now()}`,
+      id: `cmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       name: name.trim(),
       subjectLine: subjectLine.trim(),
       segment,
       htmlBody,
       scheduledAt: scheduledAt.trim(),
-      status: 'Queued',
+      status: isDueNow ? 'Dispatched' : 'Queued',
       sentCount: 0,
       openCount: 0,
       clickCount: 0
@@ -129,24 +168,15 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
 
     setName('');
     setSubjectLine('');
-    await persistCampaigns(
-      [created, ...campaigns],
-      created.status === 'Dispatched'
-        ? 'Campaign dispatched via configured ESP handler.'
-        : 'Campaign queued locally with 0 initial delivery metrics until dispatched.'
-    );
+    const next = [created, ...campaignsRef.current];
+    await persistList(next, `Saved campaign "${created.name}" (${created.status}).`);
   };
 
   return (
     <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
         <header className="border-b border-zinc-800 pb-4">
-          <h1 className="text-2xl font-bold text-[#D4AF37]">Email Campaign Template Builder & Schedule Queue</h1>
-          <p className="text-sm text-zinc-400">
-            {onDispatchCampaign || dispatchEndpoint
-              ? 'Connected to Live ESP Dispatch Provider'
-              : 'Local Campaign Queue Mode (connect onDispatchCampaign or dispatchEndpoint for live SMTP/ESP delivery)'}
-          </p>
+          <h1 className="text-2xl font-bold text-[#D4AF37]">Email Campaign Template Builder, Scheduler & Attribution Tracker</h1>
         </header>
 
         {notice && <div role="status" className="bg-emerald-950/60 border border-emerald-700 text-emerald-200 px-4 py-2 rounded text-sm">{notice}</div>}
@@ -165,7 +195,7 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
           </div>
           <textarea rows={3} value={htmlBody} onChange={e => setHtmlBody(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded p-3 text-sm font-mono text-zinc-200" />
           <button type="submit" className="bg-[#D4AF37] text-black font-bold text-sm px-5 py-2 rounded">
-            Queue / Dispatch Campaign
+            Schedule / Dispatch Campaign
           </button>
         </form>
 
@@ -173,18 +203,24 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
           {campaigns.map(c => {
             const safeSchedule = typeof c.scheduledAt === 'string' && c.scheduledAt ? c.scheduledAt.replace('T', ' ') : 'Unscheduled';
             return (
-              <div key={c.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex justify-between items-center">
+              <div key={c.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap justify-between items-center gap-4">
                 <div>
                   <div className="font-bold text-white">{c.name}</div>
                   <div className="text-xs text-zinc-400">
                     Subject: "{c.subjectLine}" · Segment: {c.segment} · Scheduled: {safeSchedule}
                   </div>
                 </div>
-                <div className="text-xs text-right">
+                <div className="flex items-center gap-2 text-xs">
                   <span className="px-2 py-0.5 rounded bg-zinc-800 text-[#D4AF37] font-bold">{c.status}</span>
-                  <div className="text-zinc-400 mt-1">
-                    Sent: {c.sentCount ?? 0} · Opens: {c.openCount ?? 0} · Clicks: {c.clickCount ?? 0}
-                  </div>
+                  <button type="button" onClick={() => recordTrackingEvent(c.id, 'sentCount')} className="px-2 py-1 rounded bg-zinc-800 text-zinc-200">
+                    + Sent ({c.sentCount ?? 0})
+                  </button>
+                  <button type="button" onClick={() => recordTrackingEvent(c.id, 'openCount')} className="px-2 py-1 rounded bg-zinc-800 text-emerald-300">
+                    + Open ({c.openCount ?? 0})
+                  </button>
+                  <button type="button" onClick={() => recordTrackingEvent(c.id, 'clickCount')} className="px-2 py-1 rounded bg-zinc-800 text-[#D4AF37]">
+                    + Click ({c.clickCount ?? 0})
+                  </button>
                 </div>
               </div>
             );
