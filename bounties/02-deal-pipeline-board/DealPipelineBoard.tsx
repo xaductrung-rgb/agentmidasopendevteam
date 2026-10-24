@@ -83,9 +83,9 @@ export const DealPipelineBoard: React.FC<DealPipelineBoardProps> = ({
   const [deals, setDeals] = useState<PipelineDeal[]>(() => {
     try {
       const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(isValidDeal)) {
+        if (Array.isArray(parsed) && parsed.every(isValidDeal)) {
           return parsed;
         }
       }
@@ -102,6 +102,8 @@ export const DealPipelineBoard: React.FC<DealPipelineBoardProps> = ({
   const [valueInput, setValueInput] = useState('15000');
   const [stageInput, setStageInput] = useState<DealStage>('Lead');
   const [searchQuery, setSearchQuery] = useState('');
+  const [draggedDealId, setDraggedDealId] = useState<string | null>(null);
+  const [dragOverStage, setDragOverStage] = useState<DealStage | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [notice, setNotice] = useState('');
@@ -141,7 +143,7 @@ export const DealPipelineBoard: React.FC<DealPipelineBoardProps> = ({
     const trimmedContact = contactName.trim();
     const rawValue = valueInput.trim();
     const numericVal = Number(rawValue);
-    if (!trimmedCompany || !trimmedContact || !rawValue || !Number.isFinite(numericVal) || numericVal <= 0) {
+    if (!trimmedCompany || !trimmedContact || !rawValue || !Number.isFinite(numericVal) || numericVal <= 0 || numericVal > 1_000_000_000) {
       setErrorMsg('Please enter a valid company name, contact name, and positive deal value.');
       return;
     }
@@ -164,6 +166,8 @@ export const DealPipelineBoard: React.FC<DealPipelineBoardProps> = ({
 
   const moveDealStage = async (id: string, nextStage: DealStage) => {
     if (saveLockRef.current) return;
+    const target = dealsRef.current.find(d => d.id === id);
+    if (!target || target.stage === nextStage) return;
     const next = dealsRef.current.map(d =>
       d.id === id
         ? {
@@ -174,7 +178,7 @@ export const DealPipelineBoard: React.FC<DealPipelineBoardProps> = ({
           }
         : d
     );
-    await persistDeals(next, `Moved deal to ${nextStage}.`);
+    await persistDeals(next, `Moved "${target.companyName}" to ${nextStage}.`);
   };
 
   const deleteDeal = async (id: string) => {
@@ -211,7 +215,7 @@ export const DealPipelineBoard: React.FC<DealPipelineBoardProps> = ({
         <header className="border-b border-zinc-800 pb-4 flex flex-wrap justify-between items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold text-[#D4AF37]">CRM Deal Pipeline Board</h1>
-            <p className="text-sm text-zinc-400">Kanban stage progression & probability-weighted revenue forecasting</p>
+            <p className="text-sm text-zinc-400">Drag-and-drop Kanban stage progression & probability-weighted revenue forecasting</p>
           </div>
           <div className="flex gap-3 text-xs">
             <div className="bg-zinc-900 border border-zinc-800 px-3 py-2 rounded">
@@ -249,15 +253,49 @@ export const DealPipelineBoard: React.FC<DealPipelineBoardProps> = ({
           {STAGES.map(stage => {
             const stageDeals = filteredDeals.filter(d => d.stage === stage);
             const stageSum = stageDeals.reduce((s, d) => s + d.valueUsd, 0);
+            const isDropTarget = dragOverStage === stage;
             return (
-              <div key={stage} className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 space-y-3">
+              <div
+                key={stage}
+                onDragOver={e => {
+                  e.preventDefault();
+                  if (dragOverStage !== stage) setDragOverStage(stage);
+                }}
+                onDragLeave={() => {
+                  if (dragOverStage === stage) setDragOverStage(null);
+                }}
+                onDrop={e => {
+                  e.preventDefault();
+                  setDragOverStage(null);
+                  const id = e.dataTransfer?.getData('text/plain') || draggedDealId;
+                  setDraggedDealId(null);
+                  if (id) void moveDealStage(id, stage);
+                }}
+                className={`bg-zinc-900 border rounded-xl p-3 space-y-3 min-h-[240px] transition ${
+                  isDropTarget ? 'border-[#D4AF37] bg-zinc-900/80' : 'border-zinc-800'
+                }`}
+              >
                 <div className="border-b border-zinc-800 pb-2">
                   <div className="text-xs font-bold text-[#D4AF37] uppercase">{stage}</div>
                   <div className="text-xs text-zinc-400">{stageDeals.length} deals · ${stageSum.toLocaleString()}</div>
                 </div>
                 <div className="space-y-2">
                   {stageDeals.map(deal => (
-                    <div key={deal.id} className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 space-y-2">
+                    <div
+                      key={deal.id}
+                      draggable={!isSaving}
+                      onDragStart={e => {
+                        setDraggedDealId(deal.id);
+                        try {
+                          e.dataTransfer.setData('text/plain', deal.id);
+                        } catch {}
+                      }}
+                      onDragEnd={() => {
+                        setDraggedDealId(null);
+                        setDragOverStage(null);
+                      }}
+                      className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 space-y-2 cursor-grab active:cursor-grabbing"
+                    >
                       <div className="font-bold text-xs text-white">{deal.companyName}</div>
                       <div className="text-xs text-zinc-400">{deal.contactName}</div>
                       <div className="text-xs font-mono text-[#D4AF37]">${deal.valueUsd.toLocaleString()} ({deal.probabilityPct}%)</div>
