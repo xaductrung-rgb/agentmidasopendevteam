@@ -1,146 +1,253 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 export interface MenuItem {
   id: string;
   name: string;
-  category: 'Starters' | 'Mains' | 'Beverages' | 'Desserts';
+  category: 'Starters' | 'Mains' | 'Beverages';
   price: number;
 }
 
-const MENU: MenuItem[] = [
-  { id: 'm-1', name: 'Wagyu Truffle Sliders', category: 'Starters', price: 24 },
-  { id: 'm-2', name: 'Crispy Calamari & Yuzu Aioli', category: 'Starters', price: 18 },
-  { id: 'm-3', name: 'Dry-Aged Ribeye (14oz)', category: 'Mains', price: 62 },
-  { id: 'm-4', name: 'Miso Glazed Black Cod', category: 'Mains', price: 44 },
-  { id: 'm-5', name: 'Smoked Old Fashioned', category: 'Beverages', price: 19 },
-  { id: 'm-6', name: '24K Gold Espresso Martini', category: 'Beverages', price: 22 },
-  { id: 'm-7', name: 'Valrhona Molten Lava Cake', category: 'Desserts', price: 16 },
+export interface OrderLine {
+  item: MenuItem;
+  qty: number;
+}
+
+export interface SettledKitchenOrder {
+  orderId: string;
+  tableNumber: number;
+  itemsCount: number;
+  total: number;
+  firedAt: string;
+}
+
+const DEFAULT_MENU: MenuItem[] = [
+  { id: 'm1', name: 'Wagyu Truffle Sliders', category: 'Starters', price: 24 },
+  { id: 'm2', name: 'Crispy Calamari', category: 'Starters', price: 18 },
+  { id: 'm3', name: 'Dry-Aged Ribeye (14oz)', category: 'Mains', price: 64 },
+  { id: 'm4', name: 'Pan-Seared Chilean Sea Bass', category: 'Mains', price: 48 },
+  { id: 'm5', name: 'Smoked Old Fashioned', category: 'Beverages', price: 19 },
+  { id: 'm6', name: 'Artisanal Sparkling Water', category: 'Beverages', price: 9 },
 ];
 
-export function RestaurantPOSInterface() {
-  const [category, setCategory] = useState<string>('ALL');
-  const [tableNumber, setTableNumber] = useState<string>('Table 04');
-  const [cart, setCart] = useState<Record<string, number>>({ 'm-1': 1, 'm-3': 1 });
+const MENU_STORAGE_KEY = 'agentmidas_pos_menu_v1';
+const ORDERS_STORAGE_KEY = 'agentmidas_pos_orders_v1';
 
-  const visibleMenu = useMemo(() => {
-    return MENU.filter(item => category === 'ALL' || item.category === category);
-  }, [category]);
+export function RestaurantPOSInterface() {
+  const [menu, setMenu] = useState<MenuItem[]>(DEFAULT_MENU);
+  const [activeCategory, setActiveCategory] = useState<string>('ALL');
+  const [tableNumber, setTableNumber] = useState<number>(12);
+  const [ticket, setTicket] = useState<OrderLine[]>([]);
+  const [settledOrders, setSettledOrders] = useState<SettledKitchenOrder[]>([]);
+  const [newMenuName, setNewMenuName] = useState<string>('');
+  const [newMenuCategory, setNewMenuCategory] = useState<MenuItem['category']>('Mains');
+  const [newMenuPrice, setNewMenuPrice] = useState<string>('32');
+
+  useEffect(() => {
+    try {
+      const savedMenu = window.localStorage.getItem(MENU_STORAGE_KEY);
+      if (savedMenu) {
+        const parsed = JSON.parse(savedMenu) as MenuItem[];
+        if (Array.isArray(parsed) && parsed.length > 0) setMenu(parsed);
+      }
+      const savedOrders = window.localStorage.getItem(ORDERS_STORAGE_KEY);
+      if (savedOrders) {
+        const parsedOrders = JSON.parse(savedOrders) as SettledKitchenOrder[];
+        if (Array.isArray(parsedOrders)) setSettledOrders(parsedOrders);
+      }
+    } catch {}
+  }, []);
+
+  const addItemToTicket = (item: MenuItem) => {
+    setTicket(prev => {
+      const existing = prev.find(l => l.item.id === item.id);
+      if (existing) {
+        return prev.map(l => (l.item.id === item.id ? { ...l, qty: l.qty + 1 } : l));
+      }
+      return [...prev, { item, qty: 1 }];
+    });
+  };
+
+  const handleAddMenuItem = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!newMenuName.trim()) return;
+    const created: MenuItem = {
+      id: `m-${Date.now().toString().slice(-4)}`,
+      name: newMenuName.trim(),
+      category: newMenuCategory,
+      price: Math.max(1, Number(newMenuPrice) || 10),
+    };
+    const nextMenu = [...menu, created];
+    setMenu(nextMenu);
+    try {
+      window.localStorage.setItem(MENU_STORAGE_KEY, JSON.stringify(nextMenu));
+    } catch {}
+    setNewMenuName('');
+  };
+
+  const removeMenuItem = (id: string) => {
+    const nextMenu = menu.filter(m => m.id !== id);
+    setMenu(nextMenu);
+    try {
+      window.localStorage.setItem(MENU_STORAGE_KEY, JSON.stringify(nextMenu));
+    } catch {}
+  };
 
   const orderSummary = useMemo(() => {
-    const lines = Object.entries(cart)
-      .map(([id, qty]) => {
-        const item = MENU.find(m => m.id === id);
-        return item && qty > 0 ? { item, qty, lineTotal: item.price * qty } : null;
-      })
-      .filter((x): x is { item: MenuItem; qty: number; lineTotal: number } => Boolean(x));
-    const subtotal = lines.reduce((s, l) => s + l.lineTotal, 0);
-    const tax = subtotal * 0.085;
+    const subtotal = ticket.reduce((sum, l) => sum + l.item.price * l.qty, 0);
+    const tax = subtotal * 0.08875;
     const total = subtotal + tax;
-    return { lines, subtotal, tax, total };
-  }, [cart]);
+    return { subtotal, tax, total };
+  }, [ticket]);
 
-  function addItem(id: string) {
-    setCart(prev => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
-  }
+  const fireAndSettleOrder = () => {
+    if (ticket.length === 0) return;
+    const record: SettledKitchenOrder = {
+      orderId: `KDS-${Date.now().toString().slice(-4)}`,
+      tableNumber,
+      itemsCount: ticket.reduce((s, l) => s + l.qty, 0),
+      total: orderSummary.total,
+      firedAt: new Date().toLocaleTimeString(),
+    };
+    const nextOrders = [record, ...settledOrders];
+    setSettledOrders(nextOrders);
+    try {
+      window.localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(nextOrders));
+    } catch {}
+    setTicket([]);
+  };
 
-  function clearTicket() {
-    setCart({});
-  }
+  const visibleMenu = useMemo(
+    () => menu.filter(m => activeCategory === 'ALL' || m.category === activeCategory),
+    [menu, activeCategory]
+  );
 
   return (
-    <section className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] py-10 px-6 font-sans">
+    <section aria-label="Restaurant POS Interface" className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#2A2A2A] pb-4">
-            <div>
-              <span className="text-xs uppercase tracking-widest text-[#D4AF37] font-mono">Agent Midas • Hospitality POS</span>
-              <h1 className="text-2xl font-bold mt-1">Touchscreen Restaurant Point-of-Sale</h1>
+        <div className="lg:col-span-2 space-y-4">
+          <header className="flex flex-wrap items-center justify-between gap-2 border-b border-[#262626] pb-4">
+            <h1 className="text-2xl font-bold text-[#D4AF37]">Midas Hospitality POS</h1>
+            <div className="flex gap-2">
+              {['ALL', 'Starters', 'Mains', 'Beverages'].map(cat => (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setActiveCategory(cat)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                    activeCategory === cat ? 'bg-[#D4AF37] text-[#0A0A0A]' : 'bg-[#0D0D0D] text-[#A3A3A3] border border-[#262626]'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
             </div>
-            <select
-              value={tableNumber}
-              onChange={e => setTableNumber(e.target.value)}
-              className="bg-[#141414] border border-[#D4AF37] rounded-lg px-3 py-2 text-sm font-mono text-[#E8C547]"
-            >
-              <option value="Table 01">Table 01 (Patio)</option>
-              <option value="Table 04">Table 04 (VIP Booth)</option>
-              <option value="Table 09">Table 09 (Main Dining)</option>
-              <option value="Bar Tab">Bar Counter</option>
-            </select>
           </header>
 
-          <div className="flex gap-2 flex-wrap">
-            {['ALL', 'Starters', 'Mains', 'Beverages', 'Desserts'].map(cat => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => setCategory(cat)}
-                className={`px-4 py-2 rounded-lg text-xs font-semibold border ${category === cat ? 'bg-[#D4AF37] text-[#0A0A0A] border-[#D4AF37]' : 'bg-[#141414] text-[#9CA3AF] border-[#2A2A2A]'}`}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {visibleMenu.map(item => (
+              <div
+                key={item.id}
+                className="flex items-center justify-between p-4 rounded-xl bg-[#0D0D0D] border border-[#262626] hover:border-[#D4AF37]"
               >
-                {cat}
-              </button>
+                <button type="button" onClick={() => addItemToTicket(item)} className="text-left flex-1">
+                  <p className="font-semibold text-[#F5F5F5]">{item.name}</p>
+                  <p className="text-xs text-[#A3A3A3]">{item.category} • <span className="text-[#D4AF37] font-mono">${item.price}</span></p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeMenuItem(item.id)}
+                  aria-label={`Remove ${item.name} from menu`}
+                  className="ml-2 text-xs text-[#EF4444] hover:underline"
+                >
+                  Delete
+                </button>
+              </div>
             ))}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {visibleMenu.map(item => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => addItem(item.id)}
-                className="text-left bg-[#0D0D0D] hover:bg-[#141414] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl p-5 flex items-center justify-between transition"
-              >
-                <div>
-                  <p className="text-xs text-[#9CA3AF]">{item.category}</p>
-                  <p className="font-semibold text-base mt-0.5">{item.name}</p>
-                </div>
-                <span className="font-mono text-lg font-bold text-[#D4AF37]">${item.price}</span>
-              </button>
-            ))}
-          </div>
+          <form onSubmit={handleAddMenuItem} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4 grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+            <div>
+              <label htmlFor="pos-item-name" className="block text-xs text-[#A3A3A3] mb-1">New Menu Item</label>
+              <input id="pos-item-name" type="text" required value={newMenuName} onChange={e => setNewMenuName(e.target.value)} placeholder="Dish title" className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label htmlFor="pos-item-cat" className="block text-xs text-[#A3A3A3] mb-1">Category</label>
+              <select id="pos-item-cat" value={newMenuCategory} onChange={e => setNewMenuCategory(e.target.value as MenuItem['category'])} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-1.5 text-sm">
+                <option value="Starters">Starters</option>
+                <option value="Mains">Mains</option>
+                <option value="Beverages">Beverages</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="pos-item-price" className="block text-xs text-[#A3A3A3] mb-1">Price ($)</label>
+              <input id="pos-item-price" type="number" value={newMenuPrice} onChange={e => setNewMenuPrice(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-1.5 text-sm" />
+            </div>
+            <button type="submit" className="py-2 rounded bg-[#D4AF37] text-[#0A0A0A] font-bold text-xs">+ Add Dish</button>
+          </form>
         </div>
 
-        <aside className="bg-[#0D0D0D] border border-[#2A2A2A] rounded-xl p-6 flex flex-col justify-between space-y-6">
+        <aside className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 flex flex-col justify-between space-y-4">
           <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-[#2A2A2A] pb-3">
-              <h2 className="font-bold text-lg text-[#D4AF37]">Active Ticket • {tableNumber}</h2>
-              <button type="button" onClick={clearTicket} className="text-xs text-[#9CA3AF] hover:text-[#F5F5F5]">Clear</button>
+            <div className="flex items-center justify-between border-b border-[#262626] pb-3">
+              <h2 className="text-lg font-semibold text-[#D4AF37]">Table #{tableNumber} Ticket</h2>
+              <label htmlFor="pos-table-num" className="sr-only">Table Number</label>
+              <input
+                id="pos-table-num"
+                type="number"
+                min={1}
+                max={99}
+                value={tableNumber}
+                onChange={e => setTableNumber(Number(e.target.value) || 1)}
+                className="w-16 bg-[#0A0A0A] border border-[#262626] rounded px-2 py-1 text-sm text-center"
+              />
             </div>
-            <div className="space-y-3 max-h-80 overflow-y-auto">
-              {orderSummary.lines.map(({ item, qty, lineTotal }) => (
-                <div key={item.id} className="flex items-center justify-between text-sm">
-                  <span>{qty}x {item.name}</span>
-                  <span className="font-mono text-[#E8C547]">${lineTotal.toFixed(2)}</span>
+            <div className="space-y-2">
+              {ticket.map(line => (
+                <div key={line.item.id} className="flex items-center justify-between text-sm">
+                  <span>{line.qty}x {line.item.name}</span>
+                  <span className="font-mono">${(line.item.price * line.qty).toFixed(2)}</span>
                 </div>
               ))}
-              {orderSummary.lines.length === 0 && (
-                <p className="text-xs text-[#6B7280] py-8 text-center">Tap any menu item to add to ticket.</p>
-              )}
+              {ticket.length === 0 && <p className="text-xs text-[#A3A3A3]">Tap dishes on the left to build ticket.</p>}
             </div>
           </div>
 
-          <div className="border-t border-[#2A2A2A] pt-4 space-y-2 text-sm">
-            <div className="flex justify-between text-[#9CA3AF]">
+          <div className="border-t border-[#262626] pt-4 space-y-2 text-sm">
+            <div className="flex justify-between text-[#A3A3A3]">
               <span>Subtotal</span>
               <span className="font-mono">${orderSummary.subtotal.toFixed(2)}</span>
             </div>
-            <div className="flex justify-between text-[#9CA3AF]">
-              <span>Tax (8.5%)</span>
+            <div className="flex justify-between text-[#A3A3A3]">
+              <span>Tax (8.875%)</span>
               <span className="font-mono">${orderSummary.tax.toFixed(2)}</span>
             </div>
-            <div className="flex justify-between text-lg font-bold text-[#D4AF37] pt-2">
-              <span>Total Due</span>
+            <div className="flex justify-between text-lg font-bold text-[#D4AF37]">
+              <span>Total</span>
               <span className="font-mono">${orderSummary.total.toFixed(2)}</span>
             </div>
             <button
               type="button"
-              onClick={clearTicket}
-              className="w-full mt-4 py-3 rounded-lg bg-[#D4AF37] text-[#0A0A0A] font-bold text-sm hover:bg-[#E8C547]"
+              disabled={ticket.length === 0}
+              onClick={fireAndSettleOrder}
+              className="w-full mt-2 py-3 rounded-lg bg-[#D4AF37] text-[#0A0A0A] font-bold text-sm hover:bg-[#E8C547] disabled:opacity-40"
             >
               Fire to Kitchen & Settle (${orderSummary.total.toFixed(2)})
             </button>
           </div>
+
+          {settledOrders.length > 0 && (
+            <div className="border-t border-[#262626] pt-3 space-y-1.5">
+              <h3 className="text-xs uppercase text-[#A3A3A3]">Recent Kitchen Dispatches</h3>
+              {settledOrders.slice(0, 4).map(o => (
+                <div key={o.orderId} className="text-xs flex justify-between text-[#22C55E]">
+                  <span>{o.orderId} (Table #{o.tableNumber}, {o.itemsCount} items)</span>
+                  <span className="font-mono">${o.total.toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </aside>
       </div>
     </section>
