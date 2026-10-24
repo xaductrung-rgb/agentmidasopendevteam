@@ -1,145 +1,192 @@
-'use client';
+import React, { useState } from 'react';
 
-import React, { useEffect, useState } from 'react';
+export type SocialPlatform = 'X' | 'LinkedIn' | 'Instagram' | 'YouTube';
 
 export interface ScheduledSocialPost {
   id: string;
-  platform: 'X (Twitter)' | 'LinkedIn' | 'Instagram';
+  platforms: SocialPlatform[];
   content: string;
-  scheduledTime: string;
+  scheduledAt: string;
+  status: 'Scheduled' | 'Published';
   impressions: number;
-  engagementRate: number;
+  engagementRatePct: number;
 }
 
-const PLATFORM_LIMITS: Record<ScheduledSocialPost['platform'], number> = {
-  'X (Twitter)': 280,
-  LinkedIn: 3000,
-  Instagram: 2200,
-};
+export interface SocialMediaSchedulerProps {
+  storageKey?: string;
+  initialPosts?: ScheduledSocialPost[];
+  nowMs?: number;
+  onChange?: (posts: ScheduledSocialPost[]) => void | Promise<void>;
+}
 
-const STORAGE_KEY = 'agentmidas_social_posts_v2';
+const ALL_PLATFORMS: SocialPlatform[] = ['X', 'LinkedIn', 'Instagram', 'YouTube'];
 
-export function SocialMediaScheduler() {
-  const [posts, setPosts] = useState<ScheduledSocialPost[]>([
-    {
-      id: 'sp-1',
-      platform: 'X (Twitter)',
-      content: 'Shipping zero-dependency apps on the Agent Midas Developer OS Program! #AgentMidas',
-      scheduledTime: '2026-10-25T15:00',
-      impressions: 12800,
-      engagementRate: 6.4,
-    },
-  ]);
-  const [platform, setPlatform] = useState<ScheduledSocialPost['platform']>('X (Twitter)');
-  const [content, setContent] = useState<string>('Earn 75% recurring affiliate commissions with Agent Midas.');
-  const [scheduledTime, setScheduledTime] = useState<string>('2026-10-26T12:00');
+const DEFAULT_POSTS: ScheduledSocialPost[] = [
+  {
+    id: 'post-1',
+    platforms: ['X', 'LinkedIn'],
+    content: 'Agent Midas v2.4 SDK is live with zero-latency webhook verification.',
+    scheduledAt: '2026-11-15T15:00',
+    status: 'Scheduled',
+    impressions: 0,
+    engagementRatePct: 0
+  }
+];
 
-  useEffect(() => {
+export const SocialMediaScheduler: React.FC<SocialMediaSchedulerProps> = ({
+  storageKey = 'agentmidas_social_scheduler_v2',
+  initialPosts = DEFAULT_POSTS,
+  nowMs = Date.now(),
+  onChange
+}) => {
+  const [posts, setPosts] = useState<ScheduledSocialPost[]>(() => {
     try {
-      const saved = window.localStorage.getItem(STORAGE_KEY);
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
       if (saved) {
-        const parsed = JSON.parse(saved) as ScheduledSocialPost[];
-        if (Array.isArray(parsed) && parsed.length > 0) setPosts(parsed);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch {}
-  }, []);
+    return initialPosts;
+  });
 
-  const charLimit = PLATFORM_LIMITS[platform];
-  const isOverLimit = content.length > charLimit;
+  const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(['X', 'LinkedIn']);
+  const [content, setContent] = useState('');
+  const [scheduledAt, setScheduledAt] = useState('2026-12-01T14:00');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [notice, setNotice] = useState('');
 
-  const handleSchedulePost = (e: React.FormEvent<HTMLFormElement>) => {
+  const togglePlatform = (p: SocialPlatform) => {
+    setSelectedPlatforms(curr =>
+      curr.includes(p) ? curr.filter(item => item !== p) : [...curr, p]
+    );
+  };
+
+  const handleSchedulePost = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!content.trim() || isOverLimit) return;
+    setErrorMsg('');
+    setNotice('');
+
+    if (selectedPlatforms.length === 0) {
+      setErrorMsg('Select at least one target social platform.');
+      return;
+    }
+    if (!content.trim()) {
+      setErrorMsg('Post content cannot be empty.');
+      return;
+    }
+    const parsedTime = Date.parse(scheduledAt);
+    if (Number.isNaN(parsedTime) || parsedTime <= nowMs) {
+      setErrorMsg('Schedule time must be a valid future timestamp.');
+      return;
+    }
+
     const created: ScheduledSocialPost = {
-      id: `sp-${Date.now().toString().slice(-4)}`,
-      platform,
+      id: `post-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      platforms: [...selectedPlatforms],
       content: content.trim(),
-      scheduledTime,
-      impressions: 4500,
-      engagementRate: 5.8,
+      scheduledAt,
+      status: 'Scheduled',
+      impressions: 0,
+      engagementRatePct: 0
     };
+
+    const prev = posts;
     const next = [created, ...posts];
     setPosts(next);
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch {}
-    setContent('');
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
+      if (onChange) {
+        await onChange(next);
+      }
+      setContent('');
+      setNotice(`Scheduled post across ${created.platforms.join(', ')} for ${scheduledAt.replace('T', ' ')}.`);
+    } catch {
+      setPosts(prev);
+      setErrorMsg('Failed to save scheduled post to storage; changes rolled back.');
+    }
   };
 
   return (
-    <section aria-label="Social Media Scheduler" className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans">
-      <div className="max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <form onSubmit={handleSchedulePost} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-4">
-          <h1 className="text-2xl font-bold text-[#D4AF37]">Social Media Scheduler</h1>
-          <div>
-            <label htmlFor="sm-platform" className="block text-xs text-[#A3A3A3] mb-1">Target Platform</label>
-            <select
-              id="sm-platform"
-              value={platform}
-              onChange={e => setPlatform(e.target.value as ScheduledSocialPost['platform'])}
-              className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]"
-            >
-              <option value="X (Twitter)">X (Twitter) — 280 chars</option>
-              <option value="LinkedIn">LinkedIn — 3,000 chars</option>
-              <option value="Instagram">Instagram — 2,200 chars</option>
-            </select>
-          </div>
-          <div>
-            <label htmlFor="sm-content" className="block text-xs text-[#A3A3A3] mb-1">
-              Post Copy ({content.length} / {charLimit} chars)
-            </label>
-            <textarea
-              id="sm-content"
-              rows={4}
-              required
-              value={content}
-              onChange={e => setContent(e.target.value)}
-              className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]"
-            />
-          </div>
-          <div>
-            <label htmlFor="sm-time" className="block text-xs text-[#A3A3A3] mb-1">Scheduled Publish Time</label>
-            <input
-              id="sm-time"
-              type="datetime-local"
-              required
-              value={scheduledTime}
-              onChange={e => setScheduledTime(e.target.value)}
-              className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={isOverLimit}
-            className="w-full py-2.5 rounded-lg bg-[#D4AF37] text-[#0A0A0A] font-bold text-sm disabled:opacity-40"
-          >
-            Schedule Multi-Platform Post
-          </button>
-        </form>
+    <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
+      <div className="max-w-5xl mx-auto space-y-6">
+        <header className="border-b border-zinc-800 pb-4">
+          <h1 className="text-2xl font-bold text-[#D4AF37]">Multi-Platform Social Media Scheduler</h1>
+          <p className="text-sm text-zinc-400">Cross-post scheduling across X, LinkedIn, Instagram, and YouTube</p>
+        </header>
 
-        <div className="space-y-4">
-          <div className="bg-[#0D0D0D] border border-[#D4AF37]/40 rounded-xl p-5">
-            <p className="text-xs uppercase text-[#D4AF37] mb-2">Live {platform} Card Preview</p>
-            <p className="text-sm whitespace-pre-wrap">{content || 'Start typing to preview your post...'}</p>
-          </div>
+        {notice && <div role="status" className="bg-emerald-950/60 border border-emerald-700 text-emerald-200 px-4 py-2 rounded text-sm">{notice}</div>}
+        {errorMsg && <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{errorMsg}</div>}
 
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-2">
-            <h2 className="text-sm font-semibold text-[#D4AF37]">Scheduled Queue & Analytics ({posts.length})</h2>
-            {posts.map(p => (
-              <div key={p.id} className="p-3 rounded bg-[#141414] border border-[#262626] text-xs space-y-1">
-                <div className="flex justify-between text-[#D4AF37] font-semibold">
-                  <span>{p.platform}</span>
-                  <span>{p.scheduledTime.replace('T', ' ')}</span>
-                </div>
-                <p className="text-[#F5F5F5]">{p.content}</p>
-                <p className="text-[#22C55E]">Impressions: {p.impressions.toLocaleString()} • Engagement: {p.engagementRate}%</p>
-              </div>
+        <form onSubmit={handleSchedulePost} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+          <div className="flex flex-wrap gap-3 items-center">
+            <span className="text-xs text-zinc-400 font-bold uppercase">Target Platforms:</span>
+            {ALL_PLATFORMS.map(p => (
+              <label key={p} className="flex items-center gap-1.5 text-sm text-zinc-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selectedPlatforms.includes(p)}
+                  onChange={() => togglePlatform(p)}
+                />
+                {p}
+              </label>
             ))}
           </div>
+
+          <textarea
+            rows={3}
+            placeholder="Write your multi-platform post..."
+            value={content}
+            onChange={e => setContent(e.target.value)}
+            className="w-full bg-zinc-950 border border-zinc-800 rounded p-3 text-sm text-white"
+          />
+
+          <div className="flex flex-wrap justify-between items-center gap-3">
+            <input
+              type="datetime-local"
+              aria-label="Scheduled Publish Time"
+              value={scheduledAt}
+              onChange={e => setScheduledAt(e.target.value)}
+              className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
+            />
+            <button type="submit" className="bg-[#D4AF37] text-black font-bold text-sm px-5 py-2 rounded">
+              Schedule Multi-Platform Post
+            </button>
+          </div>
+        </form>
+
+        <div className="space-y-3">
+          {posts.map(p => (
+            <div key={p.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex justify-between items-center">
+              <div>
+                <div className="flex gap-1.5 mb-1">
+                  {(Array.isArray(p.platforms) ? p.platforms : []).map(plat => (
+                    <span key={plat} className="text-xs px-2 py-0.5 rounded bg-zinc-800 text-[#D4AF37] font-bold">
+                      {plat}
+                    </span>
+                  ))}
+                </div>
+                <p className="text-sm text-white">{p.content}</p>
+                <div className="text-xs text-zinc-400 mt-1">
+                  Scheduled: {typeof p.scheduledAt === 'string' ? p.scheduledAt.replace('T', ' ') : ''}
+                </div>
+              </div>
+              <div className="text-xs text-right text-zinc-400">
+                <div className="font-bold text-[#D4AF37]">{p.status}</div>
+                <div>
+                  {p.status === 'Published'
+                    ? `${p.impressions.toLocaleString()} impressions (${p.engagementRatePct}%)`
+                    : 'Pending publish (0 impressions)'}
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
-    </section>
+    </div>
   );
-}
+};
 
 export default SocialMediaScheduler;
