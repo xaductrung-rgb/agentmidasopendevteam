@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+'use client';
+import React, { useState, useMemo, useRef } from 'react';
 
 export interface FunnelStage {
   id: string;
@@ -40,22 +41,27 @@ export const FunnelVisualizer: React.FC<FunnelVisualizerProps> = ({
   const [newStageCount, setNewStageCount] = useState('300');
   const [notice, setNotice] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const saveSeqRef = useRef(0);
 
   const persistStages = async (next: FunnelStage[], msg?: string) => {
+    const seq = ++saveSeqRef.current;
     const prev = stages;
     setStages(next);
     setErrorMsg('');
     try {
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
       if (onChange) {
         await onChange(next);
       }
+      if (seq !== saveSeqRef.current) return;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
       if (msg) setNotice(msg);
     } catch {
-      setStages(prev);
-      setErrorMsg('Failed to persist funnel stages; rolled back.');
+      if (seq === saveSeqRef.current) {
+        setStages(prev);
+        setErrorMsg('Failed to persist funnel stages; rolled back.');
+      }
     }
   };
 
@@ -98,7 +104,7 @@ export const FunnelVisualizer: React.FC<FunnelVisualizerProps> = ({
       return;
     }
     const created: FunnelStage = {
-      id: `stg-${Date.now()}`,
+      id: `stg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       name: newStageName.trim(),
       count: Math.round(parsedCount)
     };
@@ -254,7 +260,6 @@ export const FunnelVisualizer: React.FC<FunnelVisualizerProps> = ({
                   </div>
                 </div>
 
-                {/* Funnel Bar */}
                 <div className="w-full bg-zinc-950 h-5 rounded-full overflow-hidden border border-zinc-800">
                   <div
                     className="h-full bg-gradient-to-r from-[#D4AF37] to-amber-600 transition-all"
