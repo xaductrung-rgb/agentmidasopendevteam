@@ -41,6 +41,15 @@ const SLA_HOURS_BY_PRIORITY: Record<TicketPriority, number> = {
   Low: 72
 };
 
+// Controlled step-by-step workflow transitions (Closed is terminal and cannot be reopened)
+const ALLOWED_STATUS_TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
+  'Open': ['Open', 'In Progress'],
+  'In Progress': ['In Progress', 'Waiting on Customer', 'Resolved'],
+  'Waiting on Customer': ['Waiting on Customer', 'In Progress', 'Resolved'],
+  'Resolved': ['Resolved', 'Closed'],
+  'Closed': ['Closed']
+};
+
 const BASE_NOW = 1761264000000;
 
 function isValidTicket(t: any): t is SupportTicket {
@@ -125,7 +134,8 @@ export const TicketSystem: React.FC<TicketSystemProps> = ({
   });
 
   const [currentClockMs, setCurrentClockMs] = useState<number>(() => nowMs ?? Date.now());
-  const saveSeqRef = useRef(0);
+  const [isSaving, setIsSaving] = useState(false);
+  const saveLockRef = useRef(false);
 
   useEffect(() => {
     if (nowMs !== undefined) {
@@ -149,8 +159,10 @@ export const TicketSystem: React.FC<TicketSystemProps> = ({
   const [notice, setNotice] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const persistTickets = async (next: SupportTicket[], msg?: string) => {
-    const seq = ++saveSeqRef.current;
+  const persistTickets = async (next: SupportTicket[], msg?: string): Promise<boolean> => {
+    if (saveLockRef.current) return false;
+    saveLockRef.current = true;
+    setIsSaving(true);
     const prev = tickets;
     setTickets(next);
     setErrorMsg('');
@@ -158,16 +170,18 @@ export const TicketSystem: React.FC<TicketSystemProps> = ({
       if (onChange) {
         await onChange(next);
       }
-      if (seq !== saveSeqRef.current) return;
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(storageKey, JSON.stringify(next));
       }
       if (msg) setNotice(msg);
+      return true;
     } catch {
-      if (seq === saveSeqRef.current) {
-        setTickets(prev);
-        setErrorMsg('Failed to persist ticket changes; rolled back.');
-      }
+      setTickets(prev);
+      setErrorMsg('Failed to persist ticket changes; rolled back.');
+      return false;
+    } finally {
+      saveLockRef.current = false;
+      setIsSaving(false);
     }
   };
 
@@ -203,8 +217,9 @@ export const TicketSystem: React.FC<TicketSystemProps> = ({
     [tickets, selectedTicketId]
   );
 
-  const handleCreateTicket = (e: React.FormEvent) => {
+  const handleCreateTicket = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saveLockRef.current) return;
     if (!subject.trim() || !requesterEmail.trim()) {
       setErrorMsg('Ticket subject and requester email are required.');
       return;
@@ -224,20 +239,27 @@ export const TicketSystem: React.FC<TicketSystemProps> = ({
       slaTargetHours: SLA_HOURS_BY_PRIORITY[priority],
       replies: []
     };
-    setSubject('');
-    setRequesterEmail('');
-    setSelectedTicketId(created.id);
-    void persistTickets([created, ...tickets], `Created ticket ${created.id} with ${created.slaTargetHours}h SLA.`);
+    const ok = await persistTickets([created, ...tickets], `Created ticket ${created.id} with ${created.slaTargetHours}h SLA.`);
+    if (ok) {
+      setSubject('');
+      setRequesterEmail('');
+      setSelectedTicketId(created.id);
+    }
   };
 
   const updateTicketField = (id: string, patch: Partial<SupportTicket>, msg: string) => {
+    if (saveLockRef.current) return;
+    const target = tickets.find(t => t.id === id);
+    if (!target) return;
+    if (patch.status && !ALLOWED_STATUS_TRANSITIONS[target.status].includes(patch.status)) {
+      setErrorMsg(`Invalid workflow transition from ${target.status} to ${patch.status}.`);
+      return;
+    }
     const next = tickets.map(t => {
       if (t.id !== id) return t;
       const updated = { ...t, ...patch };
       if (patch.status === 'Resolved' || patch.status === 'Closed') {
         updated.resolvedAtMs = t.resolvedAtMs ?? currentClockMs;
-      } else if (patch.status) {
-        updated.resolvedAtMs = undefined;
       }
       return updated;
     });
@@ -246,7 +268,7 @@ export const TicketSystem: React.FC<TicketSystemProps> = ({
 
   const handleAddReply = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeTicket || !replyText.trim()) return;
+    if (!activeTicket || !replyText.trim() || saveLockRef.current) return;
     const reply: TicketReply = {
       id: `rep-${Date.now()}`,
       author: activeTicket.assignee || 'Support Agent',
@@ -275,8 +297,8 @@ export const TicketSystem: React.FC<TicketSystemProps> = ({
         {errorMsg && <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{errorMsg}</div>}
 
         <form onSubmit={handleCreateTicket} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-5 gap-3">
-          <input type="text" placeholder="Ticket Subject" value={subject} onChange={e => setSubject(e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
-          <input type="email" placeholder="Requester Email" value={requesterEmail} onChange={e => setRequesterEmail(e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input aria-label="Ticket Subject" type="text" placeholder="Ticket Subject" value={subject} onChange={e => setSubject(e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input aria-label="Requester Email" type="email" placeholder="Requester Email" value={requesterEmail} onChange={e => setRequesterEmail(e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
           <select aria-label="Ticket Priority" value={priority} onChange={e => setPriority(e.target.value as TicketPriority)} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white">
             {(['Critical', 'High', 'Medium', 'Low'] as const).map(p => (
               <option key={p} value={p}>{p} ({SLA_HOURS_BY_PRIORITY[p]}h SLA)</option>
@@ -287,7 +309,7 @@ export const TicketSystem: React.FC<TicketSystemProps> = ({
               <option key={a} value={a}>{a}</option>
             ))}
           </select>
-          <button type="submit" className="bg-[#D4AF37] text-black font-bold text-sm rounded px-4 py-2">+ Create Ticket</button>
+          <button type="submit" disabled={isSaving} className="bg-[#D4AF37] text-black font-bold text-sm rounded px-4 py-2 disabled:opacity-50">+ Create Ticket</button>
         </form>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -347,16 +369,18 @@ export const TicketSystem: React.FC<TicketSystemProps> = ({
                 <div className="flex gap-3">
                   <select
                     aria-label="Update Ticket Status"
+                    disabled={isSaving || activeTicket.status === 'Closed'}
                     value={activeTicket.status}
                     onChange={e => updateTicketField(activeTicket.id, { status: e.target.value as TicketStatus }, `Updated status to ${e.target.value}.`)}
                     className="bg-zinc-950 border border-zinc-700 rounded px-2.5 py-1.5 text-xs text-white"
                   >
-                    {(['Open', 'In Progress', 'Waiting on Customer', 'Resolved', 'Closed'] as const).map(st => (
+                    {ALLOWED_STATUS_TRANSITIONS[activeTicket.status].map(st => (
                       <option key={st} value={st}>{st}</option>
                     ))}
                   </select>
                   <select
                     aria-label="Assign Support Agent"
+                    disabled={isSaving}
                     value={activeTicket.assignee}
                     onChange={e => updateTicketField(activeTicket.id, { assignee: e.target.value }, `Assigned to ${e.target.value}.`)}
                     className="bg-zinc-950 border border-zinc-700 rounded px-2.5 py-1.5 text-xs text-white"
@@ -381,13 +405,13 @@ export const TicketSystem: React.FC<TicketSystemProps> = ({
               </div>
 
               <form onSubmit={handleAddReply} className="space-y-3 pt-3 border-t border-zinc-800">
-                <textarea rows={3} placeholder="Write a reply..." value={replyText} onChange={e => setReplyText(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded p-3 text-sm text-white" />
+                <textarea aria-label="Reply Message" rows={3} placeholder="Write a reply..." value={replyText} onChange={e => setReplyText(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded p-3 text-sm text-white" />
                 <div className="flex justify-between items-center">
                   <label className="flex items-center gap-2 text-xs text-zinc-300">
                     <input type="checkbox" checked={isInternalNote} onChange={e => setIsInternalNote(e.target.checked)} />
                     Internal Agent Note
                   </label>
-                  <button type="submit" className="bg-[#D4AF37] text-black font-bold text-xs px-4 py-2 rounded">Post Response</button>
+                  <button type="submit" disabled={isSaving} className="bg-[#D4AF37] text-black font-bold text-xs px-4 py-2 rounded disabled:opacity-50">Post Response</button>
                 </div>
               </form>
             </div>
