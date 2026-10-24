@@ -1,3 +1,4 @@
+'use client';
 import React, { useState, useMemo } from 'react';
 
 export interface InvoiceLineItem {
@@ -45,12 +46,19 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
   const [checkoutUrl, setCheckoutUrl] = useState<string>('');
   const [checkoutError, setCheckoutError] = useState<string>('');
 
+  const invalidateCheckout = () => {
+    setCheckoutUrl('');
+    setCheckoutError('');
+  };
+
   const totals = useMemo(() => {
     const subtotal = round2(items.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0));
-    const discountedSubtotal = Math.max(0, round2(subtotal - discountAmount));
-    const taxAmount = round2(discountedSubtotal * (taxRatePct / 100));
+    const safeTaxRate = Math.max(0, Math.min(100, Number.isFinite(taxRatePct) ? taxRatePct : 0));
+    const effectiveDiscount = Math.max(0, Math.min(subtotal, Number.isFinite(discountAmount) ? round2(discountAmount) : 0));
+    const discountedSubtotal = round2(subtotal - effectiveDiscount);
+    const taxAmount = round2(discountedSubtotal * (safeTaxRate / 100));
     const totalDue = round2(discountedSubtotal + taxAmount);
-    return { subtotal, discountedSubtotal, taxAmount, totalDue };
+    return { subtotal, effectiveDiscount, safeTaxRate, discountedSubtotal, taxAmount, totalDue };
   }, [items, taxRatePct, discountAmount]);
 
   const handleAddLine = (e: React.FormEvent) => {
@@ -58,13 +66,17 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
     const q = Number(qtyInput);
     const p = Number(priceInput);
     if (!descInput.trim() || Number.isNaN(q) || q <= 0 || Number.isNaN(p) || p < 0) return;
-    setItems(curr => [...curr, { id: `li-${Date.now()}`, description: descInput.trim(), quantity: q, unitPrice: round2(p) }]);
+    invalidateCheckout();
+    setItems(curr => [
+      ...curr,
+      { id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, description: descInput.trim(), quantity: q, unitPrice: round2(p) }
+    ]);
     setDescInput('');
   };
 
   const generateNewInvoiceId = () => {
+    invalidateCheckout();
     setInvoiceNumber(`INV-2026-${Math.floor(1000 + Math.random() * 9000)}`);
-    setCheckoutUrl('');
   };
 
   const handleCreateCheckoutSession = async () => {
@@ -73,8 +85,8 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
       invoiceNumber,
       clientName,
       clientEmail,
-      taxRatePct,
-      discountAmount,
+      taxRatePct: totals.safeTaxRate,
+      discountAmount: totals.effectiveDiscount,
       items,
       subtotal: totals.subtotal,
       taxAmount: totals.taxAmount,
@@ -117,9 +129,8 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
+    <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans print:bg-white print:text-black">
       <div className="max-w-4xl mx-auto space-y-6">
-        {/* Editing Controls (Hidden when printing PDF) */}
         <div className="print:hidden bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
           <div className="flex justify-between items-center">
             <h1 className="text-xl font-bold text-[#D4AF37]">Invoice Editor & Stripe Checkout Generator</h1>
@@ -134,17 +145,64 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-            <input aria-label="Invoice Number" value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
-            <input aria-label="Client Name" value={clientName} onChange={e => setClientName(e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
-            <input aria-label="Client Email" value={clientEmail} onChange={e => setClientEmail(e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
-            <input aria-label="Tax Rate (%)" type="number" step="0.1" value={taxRatePct} onChange={e => setTaxRatePct(Number(e.target.value))} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
-            <input aria-label="Discount ($)" type="number" step="0.01" value={discountAmount} onChange={e => setDiscountAmount(Number(e.target.value))} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+            <input
+              aria-label="Invoice Number"
+              value={invoiceNumber}
+              onChange={e => {
+                invalidateCheckout();
+                setInvoiceNumber(e.target.value);
+              }}
+              className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
+            />
+            <input
+              aria-label="Client Name"
+              value={clientName}
+              onChange={e => {
+                invalidateCheckout();
+                setClientName(e.target.value);
+              }}
+              className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
+            />
+            <input
+              aria-label="Client Email"
+              value={clientEmail}
+              onChange={e => {
+                invalidateCheckout();
+                setClientEmail(e.target.value);
+              }}
+              className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
+            />
+            <input
+              aria-label="Tax Rate (%)"
+              type="number"
+              min={0}
+              max={100}
+              step="0.1"
+              value={taxRatePct}
+              onChange={e => {
+                invalidateCheckout();
+                setTaxRatePct(Math.max(0, Number(e.target.value)));
+              }}
+              className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
+            />
+            <input
+              aria-label="Discount ($)"
+              type="number"
+              min={0}
+              step="0.01"
+              value={discountAmount}
+              onChange={e => {
+                invalidateCheckout();
+                setDiscountAmount(Math.max(0, Number(e.target.value)));
+              }}
+              className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
+            />
           </div>
 
           <form onSubmit={handleAddLine} className="flex flex-wrap gap-2">
             <input value={descInput} onChange={e => setDescInput(e.target.value)} placeholder="Line Item Description" className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
-            <input type="number" value={qtyInput} onChange={e => setQtyInput(e.target.value)} placeholder="Qty" className="w-20 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
-            <input type="number" step="0.01" value={priceInput} onChange={e => setPriceInput(e.target.value)} placeholder="Unit Price" className="w-28 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+            <input type="number" min={1} value={qtyInput} onChange={e => setQtyInput(e.target.value)} placeholder="Qty" className="w-20 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+            <input type="number" min={0} step="0.01" value={priceInput} onChange={e => setPriceInput(e.target.value)} placeholder="Unit Price" className="w-28 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
             <button type="submit" className="bg-[#D4AF37] text-black font-bold text-xs px-4 py-1.5 rounded">+ Add Line</button>
           </form>
 
@@ -156,21 +214,21 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
           </div>
         </div>
 
-        {/* Printable Invoice Sheet */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 space-y-6">
-          <div className="flex justify-between items-start border-b border-zinc-800 pb-4">
+        {/* High-Contrast Printable Invoice Sheet */}
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 space-y-6 print:bg-white print:text-black print:border-zinc-300">
+          <div className="flex justify-between items-start border-b border-zinc-800 print:border-zinc-300 pb-4">
             <div>
-              <h2 className="text-2xl font-bold text-[#D4AF37]">INVOICE {invoiceNumber}</h2>
-              <p className="text-xs text-zinc-400">Billed To: {clientName} ({clientEmail})</p>
+              <h2 className="text-2xl font-bold text-[#D4AF37] print:text-black">INVOICE {invoiceNumber}</h2>
+              <p className="text-xs text-zinc-400 print:text-zinc-700">Billed To: {clientName} ({clientEmail})</p>
             </div>
             <div className="text-right text-sm">
-              <div className="text-zinc-400">Total Amount Due</div>
-              <div className="text-2xl font-extrabold text-[#D4AF37]">${totals.totalDue.toFixed(2)}</div>
+              <div className="text-zinc-400 print:text-zinc-700">Total Amount Due</div>
+              <div className="text-2xl font-extrabold text-[#D4AF37] print:text-black">${totals.totalDue.toFixed(2)}</div>
             </div>
           </div>
 
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-zinc-800 text-zinc-400 text-xs uppercase">
+          <table className="w-full text-left text-sm print:text-black">
+            <thead className="border-b border-zinc-800 print:border-zinc-300 text-zinc-400 print:text-zinc-700 text-xs uppercase">
               <tr>
                 <th className="py-2">Description</th>
                 <th className="py-2">Qty</th>
@@ -178,7 +236,7 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
                 <th className="py-2 text-right">Line Total</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-800">
+            <tbody className="divide-y divide-zinc-800 print:divide-zinc-300">
               {items.map(item => (
                 <tr key={item.id}>
                   <td className="py-3">{item.description}</td>
@@ -190,31 +248,31 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
             </tbody>
           </table>
 
-          <div className="border-t border-zinc-800 pt-4 space-y-1 text-sm max-w-xs ml-auto">
-            <div className="flex justify-between text-zinc-400">
+          <div className="border-t border-zinc-800 print:border-zinc-300 pt-4 space-y-1 text-sm max-w-xs ml-auto">
+            <div className="flex justify-between text-zinc-400 print:text-zinc-700">
               <span>Subtotal:</span>
               <span className="font-mono">${totals.subtotal.toFixed(2)}</span>
             </div>
-            {discountAmount > 0 && (
-              <div className="flex justify-between text-emerald-400">
-                <span>Discount:</span>
-                <span className="font-mono">-${round2(discountAmount).toFixed(2)}</span>
+            {totals.effectiveDiscount > 0 && (
+              <div className="flex justify-between text-emerald-400 print:text-zinc-800">
+                <span>Applied Discount:</span>
+                <span className="font-mono">-${totals.effectiveDiscount.toFixed(2)}</span>
               </div>
             )}
-            <div className="flex justify-between text-zinc-300">
-              <span>Calculated Tax ({taxRatePct}%):</span>
+            <div className="flex justify-between text-zinc-300 print:text-zinc-800">
+              <span>Calculated Tax ({totals.safeTaxRate}%):</span>
               <span className="font-mono">${totals.taxAmount.toFixed(2)}</span>
             </div>
-            <div className="flex justify-between text-base font-bold text-[#D4AF37] pt-2 border-t border-zinc-800">
+            <div className="flex justify-between text-base font-bold text-[#D4AF37] print:text-black pt-2 border-t border-zinc-800 print:border-zinc-300">
               <span>Total Due:</span>
               <span className="font-mono">${totals.totalDue.toFixed(2)}</span>
             </div>
           </div>
 
           {checkoutUrl && (
-            <div className="pt-4 border-t border-zinc-800 text-xs">
-              <span className="text-zinc-400">Verified Stripe Checkout Session URL: </span>
-              <a href={checkoutUrl} className="text-[#D4AF37] underline font-mono">{checkoutUrl}</a>
+            <div className="pt-4 border-t border-zinc-800 print:border-zinc-300 text-xs">
+              <span className="text-zinc-400 print:text-zinc-700">Verified Stripe Checkout Session URL: </span>
+              <a href={checkoutUrl} className="text-[#D4AF37] print:text-black underline font-mono">{checkoutUrl}</a>
             </div>
           )}
         </div>
