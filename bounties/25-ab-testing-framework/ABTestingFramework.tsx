@@ -1,106 +1,218 @@
-'use client';
+import React, { useState, useMemo } from 'react';
 
-import React, { useMemo, useState } from 'react';
+export interface ABExperiment {
+  id: string;
+  name: string;
+  visitorsA: number;
+  conversionsA: number;
+  visitorsB: number;
+  conversionsB: number;
+}
 
-export function ABTestingFramework() {
-  const [experimentName, setExperimentName] = useState<string>('Hero Gold CTA vs. Minimal Dark CTA');
-  const [visitorsA, setVisitorsA] = useState<number>(5000);
-  const [conversionsA, setConversionsA] = useState<number>(410);
-  const [visitorsB, setVisitorsB] = useState<number>(5000);
-  const [conversionsB, setConversionsB] = useState<number>(525);
+export interface ABTestingFrameworkProps {
+  storageKey?: string;
+  initialExperiments?: ABExperiment[];
+  onChange?: (experiments: ABExperiment[]) => void | Promise<void>;
+}
 
-  const stats = useMemo(() => {
-    const nA = Math.max(1, visitorsA);
-    const nB = Math.max(1, visitorsB);
-    const cA = Math.min(nA, Math.max(0, conversionsA));
-    const cB = Math.min(nB, Math.max(0, conversionsB));
+const DEFAULT_EXPERIMENTS: ABExperiment[] = [
+  {
+    id: 'exp-1',
+    name: 'Checkout Gold CTA vs Standard Button',
+    visitorsA: 2400,
+    conversionsA: 192,
+    visitorsB: 2450,
+    conversionsB: 258
+  }
+];
+
+export const ABTestingFramework: React.FC<ABTestingFrameworkProps> = ({
+  storageKey = 'agentmidas_ab_testing_v2',
+  initialExperiments = DEFAULT_EXPERIMENTS,
+  onChange
+}) => {
+  const [experiments, setExperiments] = useState<ABExperiment[]>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return initialExperiments;
+  });
+
+  const [name, setName] = useState('');
+  const [visitorsA, setVisitorsA] = useState('1000');
+  const [conversionsA, setConversionsA] = useState('80');
+  const [visitorsB, setVisitorsB] = useState('1000');
+  const [conversionsB, setConversionsB] = useState('115');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const persistExperiments = async (next: ABExperiment[]) => {
+    const prev = experiments;
+    setExperiments(next);
+    setErrorMsg('');
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
+      if (onChange) {
+        await onChange(next);
+      }
+    } catch {
+      setExperiments(prev);
+      setErrorMsg('Failed to persist experiments.');
+    }
+  };
+
+  const evaluateStats = (exp: ABExperiment) => {
+    const nA = Math.max(1, exp.visitorsA);
+    const nB = Math.max(1, exp.visitorsB);
+    const cA = Math.min(nA, Math.max(0, exp.conversionsA));
+    const cB = Math.min(nB, Math.max(0, exp.conversionsB));
 
     const pA = cA / nA;
     const pB = cB / nB;
-    const liftPct = pA > 0 ? ((pB - pA) / pA) * 100 : 0;
+    const diff = pB - pA;
+
+    // Unpooled standard error for 95% confidence interval of difference in proportions
+    const seUnpooled = Math.sqrt((pA * (1 - pA)) / nA + (pB * (1 - pB)) / nB);
+    const ciLowPct = (diff - 1.96 * seUnpooled) * 100;
+    const ciHighPct = (diff + 1.96 * seUnpooled) * 100;
+
+    // Relative lift handling when baseline Control A has 0 conversions
+    const relativeLiftLabel =
+      pA === 0
+        ? pB === 0
+          ? '0.00% (Both 0%)'
+          : 'Undefined (Baseline A has 0 conversions)'
+        : `${(((pB - pA) / pA) * 100).toFixed(2)}%`;
+
+    // Minimum sample & cell count precondition for valid normal Z-approximation
+    const sampleSufficient =
+      nA >= 30 &&
+      nB >= 30 &&
+      cA >= 5 &&
+      cB >= 5 &&
+      nA - cA >= 5 &&
+      nB - cB >= 5;
+
+    if (!sampleSufficient) {
+      return {
+        rateAPct: (pA * 100).toFixed(2),
+        rateBPct: (pB * 100).toFixed(2),
+        relativeLiftLabel,
+        ciLabel: `[${ciLowPct.toFixed(2)}%, ${ciHighPct.toFixed(2)}%]`,
+        zScore: 'N/A',
+        significanceLabel: 'Insufficient Sample Size (requires ≥30 visitors & ≥5 conversions/non-conversions per variant)'
+      };
+    }
 
     const pPool = (cA + cB) / (nA + nB);
-    const se = Math.sqrt(pPool * (1 - pPool) * (1 / nA + 1 / nB));
-    const zScore = se > 0 ? (pB - pA) / se : 0;
-    const absZ = Math.abs(zScore);
+    const sePool = Math.sqrt(pPool * (1 - pPool) * (1 / nA + 1 / nB));
+    const z = sePool > 0 ? Math.abs(diff / sePool) : 0;
 
-    let confidenceLabel = 'Not Statistically Significant (< 90%)';
-    if (absZ >= 2.576) confidenceLabel = '99% Confidence (Statistically Significant)';
-    else if (absZ >= 1.96) confidenceLabel = '95% Confidence (Statistically Significant)';
-    else if (absZ >= 1.645) confidenceLabel = '90% Confidence (Marginal)';
+    const significanceLabel =
+      z >= 2.576
+        ? '99% Confidence (Statistically Significant)'
+        : z >= 1.96
+        ? '95% Confidence (Statistically Significant)'
+        : z >= 1.645
+        ? '90% Confidence (Marginal)'
+        : 'Inconclusive (<90% Confidence)';
 
     return {
-      rateA: (pA * 100).toFixed(2),
-      rateB: (pB * 100).toFixed(2),
-      liftPct: liftPct.toFixed(2),
-      zScore: zScore.toFixed(3),
-      confidenceLabel,
-      isSignificant95: absZ >= 1.96,
+      rateAPct: (pA * 100).toFixed(2),
+      rateBPct: (pB * 100).toFixed(2),
+      relativeLiftLabel,
+      ciLabel: `[${ciLowPct.toFixed(2)}%, ${ciHighPct.toFixed(2)}%]`,
+      zScore: z.toFixed(2),
+      significanceLabel
     };
-  }, [visitorsA, conversionsA, visitorsB, conversionsB]);
+  };
+
+  const handleAddExperiment = (e: React.FormEvent) => {
+    e.preventDefault();
+    const vA = Number(visitorsA);
+    const cA = Number(conversionsA);
+    const vB = Number(visitorsB);
+    const cB = Number(conversionsB);
+    if (!name.trim() || [vA, cA, vB, cB].some(n => Number.isNaN(n) || n < 0) || vA <= 0 || vB <= 0 || cA > vA || cB > vB) {
+      setErrorMsg('Provide a valid experiment name and valid visitor/conversion counts (conversions <= visitors).');
+      return;
+    }
+    const created: ABExperiment = {
+      id: `exp-${Date.now()}`,
+      name: name.trim(),
+      visitorsA: Math.round(vA),
+      conversionsA: Math.round(cA),
+      visitorsB: Math.round(vB),
+      conversionsB: Math.round(cB)
+    };
+    setName('');
+    void persistExperiments([created, ...experiments]);
+  };
 
   return (
-    <section aria-label="A/B Testing Framework" className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans">
-      <div className="max-w-5xl mx-auto space-y-6">
-        <header className="border-b border-[#262626] pb-4">
-          <h1 className="text-2xl md:text-3xl font-bold text-[#D4AF37]">A/B Testing Framework</h1>
-          <p className="text-sm text-[#A3A3A3]">Two-Proportion Z-Score Statistical Significance Calculator — {experimentName}</p>
+    <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
+      <div className="max-w-6xl mx-auto space-y-6">
+        <header className="border-b border-zinc-800 pb-4">
+          <h1 className="text-2xl font-bold text-[#D4AF37]">A/B Split Testing & Statistical Significance Engine</h1>
+          <p className="text-sm text-zinc-400">Two-proportion Z-test with sample-size preconditions and 95% confidence intervals</p>
         </header>
 
-        <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-          <label htmlFor="ab-exp-name" className="block text-xs text-[#A3A3A3] mb-1">Experiment Name</label>
-          <input
-            id="ab-exp-name"
-            type="text"
-            value={experimentName}
-            onChange={e => setExperimentName(e.target.value)}
-            className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-2 text-sm text-[#F5F5F5]"
-          />
-        </div>
+        {errorMsg && <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{errorMsg}</div>}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-3">
-            <h2 className="text-lg font-bold text-[#F5F5F5]">Control (Variant A) — {stats.rateA}% CR</h2>
-            <div>
-              <label htmlFor="ab-vis-a" className="block text-xs text-[#A3A3A3] mb-1">Sample Size (Visitors A)</label>
-              <input id="ab-vis-a" type="number" min={1} value={visitorsA} onChange={e => setVisitorsA(Number(e.target.value) || 1)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-2 text-sm" />
-            </div>
-            <div>
-              <label htmlFor="ab-conv-a" className="block text-xs text-[#A3A3A3] mb-1">Conversions A</label>
-              <input id="ab-conv-a" type="number" min={0} value={conversionsA} onChange={e => setConversionsA(Number(e.target.value) || 0)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-2 text-sm" />
-            </div>
-          </div>
+        <form onSubmit={handleAddExperiment} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 grid grid-cols-2 md:grid-cols-6 gap-3">
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Experiment Name" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input type="number" value={visitorsA} onChange={e => setVisitorsA(e.target.value)} placeholder="Visitors A" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input type="number" value={conversionsA} onChange={e => setConversionsA(e.target.value)} placeholder="Conversions A" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input type="number" value={visitorsB} onChange={e => setVisitorsB(e.target.value)} placeholder="Visitors B" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input type="number" value={conversionsB} onChange={e => setConversionsB(e.target.value)} placeholder="Conversions B" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <button type="submit" className="bg-[#D4AF37] text-black font-bold text-xs rounded px-4 py-2">+ Evaluate Test</button>
+        </form>
 
-          <div className="bg-[#0D0D0D] border border-[#D4AF37]/50 rounded-xl p-5 space-y-3">
-            <h2 className="text-lg font-bold text-[#D4AF37]">Challenger (Variant B) — {stats.rateB}% CR</h2>
-            <div>
-              <label htmlFor="ab-vis-b" className="block text-xs text-[#A3A3A3] mb-1">Sample Size (Visitors B)</label>
-              <input id="ab-vis-b" type="number" min={1} value={visitorsB} onChange={e => setVisitorsB(Number(e.target.value) || 1)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-2 text-sm" />
-            </div>
-            <div>
-              <label htmlFor="ab-conv-b" className="block text-xs text-[#A3A3A3] mb-1">Conversions B</label>
-              <input id="ab-conv-b" type="number" min={0} value={conversionsB} onChange={e => setConversionsB(Number(e.target.value) || 0)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-2 text-sm" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <p className="text-xs uppercase text-[#A3A3A3]">Relative Conversion Lift</p>
-            <p className="text-2xl font-bold text-[#22C55E] mt-1">{stats.liftPct}%</p>
-          </div>
-          <div>
-            <p className="text-xs uppercase text-[#A3A3A3]">Two-Proportion Z-Score</p>
-            <p className="text-2xl font-bold text-[#D4AF37] mt-1">Z = {stats.zScore}</p>
-          </div>
-          <div>
-            <p className="text-xs uppercase text-[#A3A3A3]">Statistical Decision</p>
-            <p className="text-sm font-bold text-[#F5F5F5] mt-1">{stats.confidenceLabel}</p>
-          </div>
+        <div className="space-y-4">
+          {experiments.map(exp => {
+            const st = evaluateStats(exp);
+            return (
+              <div key={exp.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
+                <div className="flex flex-wrap justify-between items-center">
+                  <h2 className="text-lg font-bold text-white">{exp.name}</h2>
+                  <span className="text-xs px-3 py-1 rounded bg-zinc-800 text-[#D4AF37] font-bold">
+                    {st.significanceLabel}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+                  <div className="bg-zinc-950 p-3 rounded border border-zinc-800">
+                    <div className="text-zinc-400">Control A Rate</div>
+                    <div className="text-base font-bold text-white">{st.rateAPct}% ({exp.conversionsA}/{exp.visitorsA})</div>
+                  </div>
+                  <div className="bg-zinc-950 p-3 rounded border border-zinc-800">
+                    <div className="text-zinc-400">Variant B Rate</div>
+                    <div className="text-base font-bold text-[#D4AF37]">{st.rateBPct}% ({exp.conversionsB}/{exp.visitorsB})</div>
+                  </div>
+                  <div className="bg-zinc-950 p-3 rounded border border-zinc-800">
+                    <div className="text-zinc-400">Relative Lift</div>
+                    <div className="text-sm font-bold text-emerald-400">{st.relativeLiftLabel}</div>
+                  </div>
+                  <div className="bg-zinc-950 p-3 rounded border border-zinc-800">
+                    <div className="text-zinc-400">95% Diff Confidence Interval</div>
+                    <div className="text-sm font-mono text-zinc-200">{st.ciLabel}</div>
+                  </div>
+                  <div className="bg-zinc-950 p-3 rounded border border-zinc-800">
+                    <div className="text-zinc-400">Z-Statistic</div>
+                    <div className="text-base font-mono text-white">{st.zScore}</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
-    </section>
+    </div>
   );
-}
+};
 
 export default ABTestingFramework;
