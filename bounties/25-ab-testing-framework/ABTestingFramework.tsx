@@ -137,21 +137,37 @@ export const ABTestingFramework: React.FC<ABTestingFrameworkProps> = ({
 
   const handleAddExperiment = (e: React.FormEvent) => {
     e.preventDefault();
+    if (
+      !name.trim() ||
+      !visitorsA.trim() ||
+      !conversionsA.trim() ||
+      !visitorsB.trim() ||
+      !conversionsB.trim()
+    ) {
+      setErrorMsg('All experiment name, visitor, and conversion fields are required.');
+      return;
+    }
     const vA = Number(visitorsA);
     const cA = Number(conversionsA);
     const vB = Number(visitorsB);
     const cB = Number(conversionsB);
-    if (!name.trim() || [vA, cA, vB, cB].some(n => Number.isNaN(n) || n < 0) || vA <= 0 || vB <= 0 || cA > vA || cB > vB) {
-      setErrorMsg('Provide a valid experiment name and valid visitor/conversion counts (conversions <= visitors).');
+    if (
+      [vA, cA, vB, cB].some(n => !Number.isInteger(n) || n < 0) ||
+      vA <= 0 ||
+      vB <= 0 ||
+      cA > vA ||
+      cB > vB
+    ) {
+      setErrorMsg('Visitor and conversion counts must be whole integers with conversions <= visitors.');
       return;
     }
     const created: ABExperiment = {
       id: `exp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       name: name.trim(),
-      visitorsA: Math.round(vA),
-      conversionsA: Math.round(cA),
-      visitorsB: Math.round(vB),
-      conversionsB: Math.round(cB)
+      visitorsA: vA,
+      conversionsA: cA,
+      visitorsB: vB,
+      conversionsB: cB
     };
     setName('');
     void persistExperiments([created, ...experiments]);
@@ -168,11 +184,11 @@ export const ABTestingFramework: React.FC<ABTestingFrameworkProps> = ({
         {errorMsg && <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{errorMsg}</div>}
 
         <form onSubmit={handleAddExperiment} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 grid grid-cols-2 md:grid-cols-6 gap-3">
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="Experiment Name" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
-          <input type="number" value={visitorsA} onChange={e => setVisitorsA(e.target.value)} placeholder="Visitors A" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
-          <input type="number" value={conversionsA} onChange={e => setConversionsA(e.target.value)} placeholder="Conversions A" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
-          <input type="number" value={visitorsB} onChange={e => setVisitorsB(e.target.value)} placeholder="Visitors B" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
-          <input type="number" value={conversionsB} onChange={e => setConversionsB(e.target.value)} placeholder="Conversions B" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input aria-label="Experiment Name" value={name} onChange={e => setName(e.target.value)} placeholder="Experiment Name" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input aria-label="Control A Visitors" type="number" step="1" value={visitorsA} onChange={e => setVisitorsA(e.target.value)} placeholder="Visitors A" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input aria-label="Control A Conversions" type="number" step="1" value={conversionsA} onChange={e => setConversionsA(e.target.value)} placeholder="Conversions A" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input aria-label="Variant B Visitors" type="number" step="1" value={visitorsB} onChange={e => setVisitorsB(e.target.value)} placeholder="Visitors B" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input aria-label="Variant B Conversions" type="number" step="1" value={conversionsB} onChange={e => setConversionsB(e.target.value)} placeholder="Conversions B" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
           <button type="submit" className="bg-[#D4AF37] text-black font-bold text-xs rounded px-4 py-2">+ Evaluate Test</button>
         </form>
 
