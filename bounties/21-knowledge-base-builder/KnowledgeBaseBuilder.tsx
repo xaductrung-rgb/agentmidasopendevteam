@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+'use client';
+import React, { useState, useMemo, useRef } from 'react';
 
 export interface KBArticle {
   id: string;
@@ -72,24 +73,38 @@ export const KnowledgeBaseBuilder: React.FC<KnowledgeBaseBuilderProps> = ({
   const [body, setBody] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [notice, setNotice] = useState('');
+  const saveSeqRef = useRef(0);
 
   const persistArticles = async (next: KBArticle[]): Promise<boolean> => {
+    const seq = ++saveSeqRef.current;
     const prev = articles;
     setArticles(next);
     setErrorMsg('');
     try {
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
       if (onChange) {
         await onChange(next);
       }
+      if (seq !== saveSeqRef.current) return true;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
       return true;
     } catch {
-      setArticles(prev);
-      setErrorMsg('Storage write failed (quota or unavailable). Form content preserved.');
+      if (seq === saveSeqRef.current) {
+        setArticles(prev);
+        setErrorMsg('Storage or callback write failed. Changes rolled back and form content preserved.');
+      }
       return false;
     }
+  };
+
+  const generateCollisionFreeId = (existing: KBArticle[]): string => {
+    const used = new Set(existing.map(a => a.id));
+    let n = 101 + existing.length;
+    while (used.has(`KB-${n}`)) {
+      n += 1;
+    }
+    return `KB-${n}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
   };
 
   const parentCategories = useMemo(
@@ -145,7 +160,7 @@ export const KnowledgeBaseBuilder: React.FC<KnowledgeBaseBuilderProps> = ({
       return;
     }
     const created: KBArticle = {
-      id: `KB-${103 + articles.length}`,
+      id: generateCollisionFreeId(articles),
       title: title.trim(),
       parentCategory: parentCategory.trim(),
       subCategory: subCategory.trim(),
