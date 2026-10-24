@@ -15,7 +15,7 @@ export interface EmailCampaign {
   segment: string;
   blocks: EmailBlock[];
   scheduledAt: string;
-  status: 'Queued' | 'Ready (Awaiting ESP)' | 'Dispatched';
+  status: 'Queued' | 'Ready (Awaiting ESP)' | 'Dispatched' | 'Dispatch Failed';
   sentCount: number;
   openCount: number;
   clickCount: number;
@@ -70,6 +70,7 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
   const campaignsRef = useRef<EmailCampaign[]>(campaigns);
   campaignsRef.current = campaigns;
   const saveSeqRef = useRef(0);
+  const schedulerRunningRef = useRef(false);
 
   const [name, setName] = useState('');
   const [subjectLine, setSubjectLine] = useState('');
@@ -103,9 +104,9 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
     }
   };
 
-  // Scheduler loop: only dispatches when scheduledAt <= Date.now(), and never fabricates sentCount when no ESP is wired
   useEffect(() => {
     const timer = setInterval(async () => {
+      if (schedulerRunningRef.current) return;
       const now = Date.now();
       const curr = campaignsRef.current;
       const dueCampaigns = curr.filter(
@@ -113,35 +114,44 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
       );
       if (dueCampaigns.length === 0) return;
 
-      const updated: EmailCampaign[] = [];
-      for (const c of curr) {
-        if (c.status === 'Queued' && typeof c.scheduledAt === 'string' && Date.parse(c.scheduledAt) <= now) {
-          if (onDispatchCampaign) {
-            try {
-              const res = await onDispatchCampaign(c);
-              updated.push({ ...c, status: 'Dispatched', sentCount: res?.sentCount ?? c.sentCount });
-              continue;
-            } catch {}
-          } else if (dispatchEndpoint) {
-            try {
-              const resp = await fetch(dispatchEndpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(c)
-              });
-              if (resp.ok) {
-                updated.push({ ...c, status: 'Dispatched' });
-                continue;
+      schedulerRunningRef.current = true;
+      try {
+        const updated: EmailCampaign[] = [];
+        for (const c of curr) {
+          if (c.status === 'Queued' && typeof c.scheduledAt === 'string' && Date.parse(c.scheduledAt) <= now) {
+            if (onDispatchCampaign) {
+              try {
+                const res = await onDispatchCampaign(c);
+                updated.push({ ...c, status: 'Dispatched', sentCount: res?.sentCount ?? c.sentCount });
+              } catch {
+                updated.push({ ...c, status: 'Dispatch Failed' });
               }
-            } catch {}
+            } else if (dispatchEndpoint) {
+              try {
+                const resp = await fetch(dispatchEndpoint, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(c)
+                });
+                if (resp.ok) {
+                  updated.push({ ...c, status: 'Dispatched' });
+                } else {
+                  updated.push({ ...c, status: 'Dispatch Failed' });
+                }
+              } catch {
+                updated.push({ ...c, status: 'Dispatch Failed' });
+              }
+            } else {
+              updated.push({ ...c, status: 'Ready (Awaiting ESP)' });
+            }
+          } else {
+            updated.push(c);
           }
-          // No live ESP configured: mark Ready without fabricating sentCount
-          updated.push({ ...c, status: 'Ready (Awaiting ESP)' });
-        } else {
-          updated.push(c);
         }
+        await persistList(updated, 'Processed due scheduled campaigns.');
+      } finally {
+        schedulerRunningRef.current = false;
       }
-      await persistList(updated, 'Processed due scheduled campaigns.');
     }, 5000);
     return () => clearInterval(timer);
   }, [onDispatchCampaign, dispatchEndpoint]);
@@ -162,6 +172,13 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
 
   const removeBlock = (id: string) => {
     setBlocks(curr => (curr.length > 1 ? curr.filter(b => b.id !== id) : curr));
+  };
+
+  const updateEngagementMetric = (id: string, field: 'sentCount' | 'openCount' | 'clickCount', rawVal: string) => {
+    const num = Number(rawVal);
+    if (!Number.isInteger(num) || num < 0) return;
+    const next = campaignsRef.current.map(c => (c.id === id ? { ...c, [field]: num } : c));
+    void persistList(next);
   };
 
   const aggregateAnalytics = useMemo(() => {
@@ -200,7 +217,6 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
       clickCount: 0
     };
 
-    // Only dispatch immediately if scheduled time is already due now
     if (isDueNow) {
       if (onDispatchCampaign) {
         try {
@@ -208,8 +224,7 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
           created.status = 'Dispatched';
           created.sentCount = res?.sentCount ?? 0;
         } catch {
-          setErrorMsg('Live ESP dispatch callback failed.');
-          return;
+          created.status = 'Dispatch Failed';
         }
       } else if (dispatchEndpoint) {
         try {
@@ -218,11 +233,9 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(created)
           });
-          if (!resp.ok) throw new Error('ESP HTTP error');
-          created.status = 'Dispatched';
+          created.status = resp.ok ? 'Dispatched' : 'Dispatch Failed';
         } catch {
-          setErrorMsg('Live ESP dispatch endpoint failed.');
-          return;
+          created.status = 'Dispatch Failed';
         }
       } else {
         created.status = 'Ready (Awaiting ESP)';
@@ -262,7 +275,6 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
         {errorMsg && <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{errorMsg}</div>}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Visual Block Editor & Campaign Scheduler */}
           <form onSubmit={handleScheduleCampaign} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
             <h2 className="text-base font-bold text-[#D4AF37]">1. Campaign Metadata & Visual Blocks</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -294,7 +306,7 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
                     onChange={e => updateBlockText(b.id, e.target.value)}
                     className="flex-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-xs text-white"
                   />
-                  <button type="button" onClick={() => removeBlock(b.id)} className="text-xs text-red-400 px-2">✕</button>
+                  <button type="button" aria-label={`Remove ${b.type} block`} onClick={() => removeBlock(b.id)} className="text-xs text-red-400 px-2">✕</button>
                 </div>
               ))}
             </div>
@@ -304,7 +316,6 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
             </button>
           </form>
 
-          {/* Rendered Visual Email Preview */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
             <h2 className="text-base font-bold text-[#D4AF37]">2. Live Visual Email Template Preview</h2>
             <div className="bg-white text-zinc-900 rounded-lg p-6 space-y-4">
@@ -339,10 +350,42 @@ export const EmailCampaignBuilder: React.FC<EmailCampaignBuilderProps> = ({
                     Subject: "{c.subjectLine}" · Segment: {c.segment} · Scheduled: {safeSchedule}
                   </div>
                 </div>
-                <div className="text-xs text-right">
+                <div className="text-xs text-right space-y-2">
                   <span className="px-2 py-0.5 rounded bg-zinc-800 text-[#D4AF37] font-bold">{c.status}</span>
-                  <div className="text-zinc-400 mt-1">
-                    Sent: {c.sentCount ?? 0} · Opens: {c.openCount ?? 0} ({openPct}%) · Clicks: {c.clickCount ?? 0} ({clickPct}%)
+                  <div className="flex flex-wrap items-center gap-2 text-zinc-300">
+                    <label className="flex items-center gap-1">
+                      <span>Sent:</span>
+                      <input
+                        aria-label={`Sent count for ${c.name}`}
+                        type="number"
+                        min={0}
+                        value={c.sentCount ?? 0}
+                        onChange={e => updateEngagementMetric(c.id, 'sentCount', e.target.value)}
+                        className="w-20 bg-zinc-950 border border-zinc-800 rounded px-1.5 py-0.5 text-xs text-white"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <span>Opens ({openPct}%):</span>
+                      <input
+                        aria-label={`Open count for ${c.name}`}
+                        type="number"
+                        min={0}
+                        value={c.openCount ?? 0}
+                        onChange={e => updateEngagementMetric(c.id, 'openCount', e.target.value)}
+                        className="w-20 bg-zinc-950 border border-zinc-800 rounded px-1.5 py-0.5 text-xs text-white"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <span>Clicks ({clickPct}%):</span>
+                      <input
+                        aria-label={`Click count for ${c.name}`}
+                        type="number"
+                        min={0}
+                        value={c.sentCount !== undefined ? (c.clickCount ?? 0) : 0}
+                        onChange={e => updateEngagementMetric(c.id, 'clickCount', e.target.value)}
+                        className="w-20 bg-zinc-950 border border-zinc-800 rounded px-1.5 py-0.5 text-xs text-white"
+                      />
+                    </label>
                   </div>
                 </div>
               </div>
