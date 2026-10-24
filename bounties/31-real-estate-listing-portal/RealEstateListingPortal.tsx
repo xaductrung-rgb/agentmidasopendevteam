@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+'use client';
+import React, { useState, useMemo, useRef } from 'react';
 
 export interface PropertyListing {
   id: string;
@@ -26,6 +27,29 @@ const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
   'new york': { lat: 40.7128, lng: -74.0060 },
   'los angeles': { lat: 34.0522, lng: -118.2437 }
 };
+
+const TOUR_ROOMS = [
+  { id: 'foyer', label: 'Grand Foyer', fovDesc: 'Double-height marble entryway with custom chandelier' },
+  { id: 'living', label: 'Skyline Living Salon', fovDesc: 'Floor-to-ceiling panoramic glass overlooking city skyline' },
+  { id: 'kitchen', label: 'Chef Kitchen', fovDesc: 'Waterfall quartz island with integrated Gaggenau appliances' },
+  { id: 'terrace', label: 'Infinity Pool Terrace', fovDesc: 'Heated zero-edge pool with outdoor fire lounge' }
+];
+
+function isValidListing(item: any): item is PropertyListing {
+  return (
+    item &&
+    typeof item === 'object' &&
+    typeof item.id === 'string' &&
+    typeof item.title === 'string' &&
+    typeof item.city === 'string' &&
+    typeof item.price === 'number' &&
+    Number.isFinite(item.price) &&
+    typeof item.lat === 'number' &&
+    Number.isFinite(item.lat) &&
+    typeof item.lng === 'number' &&
+    Number.isFinite(item.lng)
+  );
+}
 
 const makeUniqueId = () =>
   typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -69,13 +93,18 @@ export const RealEstateListingPortal: React.FC<RealEstateListingPortalProps> = (
       const raw = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) {
+          const valid = parsed.filter(isValidListing);
+          if (valid.length > 0) return valid;
+        }
       }
     } catch {}
     return initialListings;
   });
 
   const [selectedId, setSelectedId] = useState<string>(listings[0]?.id || 'prop-101');
+  const [activeRoomId, setActiveRoomId] = useState<string>('foyer');
+  const [panYawDeg, setPanYawDeg] = useState<number>(120);
   const [title, setTitle] = useState('');
   const [city, setCity] = useState('Austin');
   const [price, setPrice] = useState('950000');
@@ -85,27 +114,37 @@ export const RealEstateListingPortal: React.FC<RealEstateListingPortalProps> = (
   const [interestRatePct, setInterestRatePct] = useState(6.5);
   const [loanTermYears, setLoanTermYears] = useState(30);
   const [errorMsg, setErrorMsg] = useState('');
+  const saveSeqRef = useRef(0);
 
   const persistListings = async (next: PropertyListing[]) => {
+    const seq = ++saveSeqRef.current;
     const prev = listings;
     setListings(next);
     setErrorMsg('');
     try {
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
       if (onChange) {
         await onChange(next);
       }
+      if (seq !== saveSeqRef.current) return;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
     } catch {
-      setListings(prev);
-      setErrorMsg('Failed to persist property listings.');
+      if (seq === saveSeqRef.current) {
+        setListings(prev);
+        setErrorMsg('Failed to persist property listings.');
+      }
     }
   };
 
   const activeProperty = useMemo(
     () => listings.find(l => l.id === selectedId) || listings[0],
     [listings, selectedId]
+  );
+
+  const activeRoom = useMemo(
+    () => TOUR_ROOMS.find(r => r.id === activeRoomId) || TOUR_ROOMS[0],
+    [activeRoomId]
   );
 
   const monthlyMortgage = useMemo(() => {
@@ -157,7 +196,7 @@ export const RealEstateListingPortal: React.FC<RealEstateListingPortalProps> = (
     <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
       <div className="max-w-7xl mx-auto space-y-6">
         <header className="border-b border-zinc-800 pb-4">
-          <h1 className="text-2xl font-bold text-[#D4AF37]">Luxury Real Estate Portal, Map & Mortgage Calculator</h1>
+          <h1 className="text-2xl font-bold text-[#D4AF37]">Luxury Real Estate Portal, Geospatial Map & 360° Virtual Tour</h1>
         </header>
 
         {errorMsg && (
@@ -195,14 +234,78 @@ export const RealEstateListingPortal: React.FC<RealEstateListingPortalProps> = (
 
           {activeProperty && (
             <div className="lg:col-span-2 space-y-6">
+              {/* Interactive Geospatial SVG Map Viewport */}
               <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
-                <h2 className="text-xl font-bold text-white">{activeProperty.title} — {activeProperty.city}</h2>
-                <p className="text-sm text-[#D4AF37] font-mono">
-                  Geospatial Map Pin: Lat {activeProperty.lat.toFixed(4)}, Lng {activeProperty.lng.toFixed(4)}
-                </p>
-                <p className="text-xs text-zinc-300">
-                  3D Virtual Tour: <a href={activeProperty.virtualTourUrl} className="underline text-[#D4AF37]">{activeProperty.virtualTourUrl}</a>
-                </p>
+                <h2 className="text-lg font-bold text-[#D4AF37]">Interactive Property Map Viewport</h2>
+                <svg
+                  viewBox="0 0 600 220"
+                  role="img"
+                  aria-label="Interactive Property Map"
+                  className="w-full h-48 bg-zinc-950 border border-zinc-800 rounded-lg"
+                >
+                  {listings.map(l => {
+                    const x = Math.max(30, Math.min(570, ((l.lng + 125) / 60) * 540 + 30));
+                    const y = Math.max(25, Math.min(195, ((50 - l.lat) / 28) * 170 + 25));
+                    const isSelected = l.id === activeProperty.id;
+                    return (
+                      <g
+                        key={l.id}
+                        onClick={() => setSelectedId(l.id)}
+                        className="cursor-pointer"
+                      >
+                        <circle
+                          cx={x}
+                          cy={y}
+                          r={isSelected ? 9 : 6}
+                          fill={isSelected ? '#D4AF37' : '#71717A'}
+                        />
+                        <text x={x + 12} y={y + 4} fill="#F4F4F5" fontSize="11">
+                          {l.city} (${Math.round(l.price / 1000)}k)
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
+                <div className="text-xs text-zinc-400">
+                  Selected Pin: <strong>{activeProperty.title}</strong> ({activeProperty.city}) — Lat {activeProperty.lat.toFixed(4)}, Lng {activeProperty.lng.toFixed(4)}
+                </div>
+              </div>
+
+              {/* Embedded 360 Virtual Tour Viewer */}
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-base font-bold text-[#D4AF37]">360° Interactive Virtual Tour Viewer</h3>
+                  <span className="text-xs font-mono text-zinc-400">Camera Yaw: {panYawDeg}°</span>
+                </div>
+                <div className="flex flex-wrap gap-2" role="tablist" aria-label="Virtual Tour Rooms">
+                  {TOUR_ROOMS.map(room => (
+                    <button
+                      key={room.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeRoom.id === room.id}
+                      onClick={() => setActiveRoomId(room.id)}
+                      className={`px-3 py-1 rounded text-xs font-bold ${
+                        activeRoom.id === room.id ? 'bg-[#D4AF37] text-black' : 'bg-zinc-950 text-zinc-300 border border-zinc-800'
+                      }`}
+                    >
+                      {room.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 space-y-2">
+                  <div className="text-sm font-bold text-white">{activeRoom.label} — {activeProperty.title}</div>
+                  <p className="text-xs text-zinc-300">{activeRoom.fovDesc}</p>
+                  <input
+                    type="range"
+                    aria-label="360 Virtual Tour Camera Pan Angle"
+                    min={0}
+                    max={360}
+                    value={panYawDeg}
+                    onChange={e => setPanYawDeg(Number(e.target.value))}
+                    className="w-full accent-[#D4AF37]"
+                  />
+                </div>
               </div>
 
               {/* Interactive Mortgage Calculator */}
