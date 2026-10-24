@@ -1,74 +1,124 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 export interface RecordItem {
   id: string;
+  parentId: string | null;
+  depth: number;
   name: string;
   category: string;
-  status: 'Active' | 'Pending' | 'Completed' | 'Flagged';
+  status: 'Active' | 'Pending' | 'Completed' | 'Compressed';
   primaryMetric: number;
-  secondaryMetric: number;
-  conversionRate: number;
+  sampleSize: number;
+  conversions: number;
+  retryAttempts: number;
+  passupRecipient: string;
   updatedAt: string;
   notes: string;
 }
 
-const INITIAL_ITEMS: RecordItem[] = [
+export interface KnowledgeBaseBuilderProps {
+  initialItems?: RecordItem[];
+  storageKey?: string;
+}
+
+const DEFAULT_ITEMS: RecordItem[] = [
   {
     id: 'AM-2101',
-    name: 'Knowledge Base Builder — Primary Enterprise Flow',
+    parentId: null,
+    depth: 0,
+    name: 'Knowledge Base Builder — Root Sponsor / Control Node',
     category: 'Tier-1 Production',
     status: 'Active',
     primaryMetric: 14850,
-    secondaryMetric: 98.4,
-    conversionRate: 14.8,
-    updatedAt: '2026-10-23 22:15 UTC',
+    sampleSize: 2400,
+    conversions: 356,
+    retryAttempts: 0,
+    passupRecipient: 'Root Sponsor (Direct 75%)',
+    updatedAt: '2026-10-24 06:15 UTC',
     notes: 'Searchable knowledge base with category hierarchy, semantic relevance scoring, and helpfulness feedback'
   },
   {
     id: 'AM-2102',
-    name: 'Knowledge Base Builder — Automated Failover & Passup',
+    parentId: 'AM-2101',
+    depth: 1,
+    name: 'Knowledge Base Builder — Sale #1 (Two-Up Passup to Root)',
     category: 'Automation',
     status: 'Active',
     primaryMetric: 8420,
-    secondaryMetric: 99.2,
-    conversionRate: 19.3,
-    updatedAt: '2026-10-23 21:40 UTC',
-    notes: 'Verified zero-dependency execution under high concurrency.'
+    sampleSize: 2350,
+    conversions: 452,
+    retryAttempts: 1,
+    passupRecipient: 'AM-2101 (Two-Up Passup #1)',
+    updatedAt: '2026-10-24 06:40 UTC',
+    notes: 'First qualifying sale passed up to upline sponsor under Two-Up rules.'
   },
   {
     id: 'AM-2103',
-    name: 'Knowledge Base Builder — High-Value Segment B',
+    parentId: 'AM-2101',
+    depth: 1,
+    name: 'Knowledge Base Builder — Inactive Node (Dynamic Compression)',
     category: 'Optimization',
-    status: 'Completed',
-    primaryMetric: 6190,
-    secondaryMetric: 96.7,
-    conversionRate: 11.4,
-    updatedAt: '2026-10-23 19:05 UTC',
-    notes: 'Statistical confidence > 95% threshold achieved.'
+    status: 'Compressed',
+    primaryMetric: 0,
+    sampleSize: 1800,
+    conversions: 210,
+    retryAttempts: 2,
+    passupRecipient: 'Compressed to AM-2101',
+    updatedAt: '2026-10-24 07:05 UTC',
+    notes: 'Inactive node automatically compressed so child volume rolls up without depth loss.'
   },
   {
     id: 'AM-2104',
-    name: 'Knowledge Base Builder — Audit & Review Queue',
+    parentId: 'AM-2103',
+    depth: 2,
+    name: 'Knowledge Base Builder — Sale #3 (Retained Direct 75% Stream)',
     category: 'Compliance',
-    status: 'Pending',
-    primaryMetric: 3150,
-    secondaryMetric: 94.1,
-    conversionRate: 8.9,
-    updatedAt: '2026-10-23 18:20 UTC',
-    notes: 'Awaiting scheduled batch sync.'
+    status: 'Active',
+    primaryMetric: 6190,
+    sampleSize: 1950,
+    conversions: 312,
+    retryAttempts: 0,
+    passupRecipient: 'Retained by Direct Qualifier (Effective Depth 1 after Compression)',
+    updatedAt: '2026-10-24 07:10 UTC',
+    notes: 'Third and subsequent referrals remain permanently on direct sponsor leg.'
   }
 ];
 
-export function KnowledgeBaseBuilder() {
-  const [items, setItems] = useState<RecordItem[]>(INITIAL_ITEMS);
+export function KnowledgeBaseBuilder({
+  initialItems = DEFAULT_ITEMS,
+  storageKey = 'agentmidas_bounty_21_v2',
+}: KnowledgeBaseBuilderProps = {}) {
+  const [items, setItems] = useState<RecordItem[]>(initialItems);
   const [query, setQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [enableCompression, setEnableCompression] = useState<boolean>(true);
   const [newName, setNewName] = useState<string>('');
+  const [newParentId, setNewParentId] = useState<string>('AM-2101');
   const [newCategory, setNewCategory] = useState<string>('Tier-1 Production');
   const [newPrimary, setNewPrimary] = useState<string>('5000');
-  const [selectedId, setSelectedId] = useState<string>(INITIAL_ITEMS[0].id);
+  const [selectedId, setSelectedId] = useState<string>(initialItems[0]?.id ?? 'AM-2101');
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved) as RecordItem[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setItems(parsed);
+          setSelectedId(parsed[0].id);
+        }
+      }
+    } catch {}
+  }, [storageKey]);
+
+  const persistItems = (next: RecordItem[]) => {
+    setItems(next);
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(next));
+    } catch {}
+  };
 
   const filteredItems = useMemo(() => {
     return items.filter(item => {
@@ -84,21 +134,30 @@ export function KnowledgeBaseBuilder() {
   }, [items, query, statusFilter]);
 
   const summary = useMemo(() => {
-    const totalVolume = items.reduce((acc, i) => acc + i.primaryMetric, 0);
-    const avgConversion =
-      items.length > 0
-        ? items.reduce((acc, i) => acc + i.conversionRate, 0) / items.length
-        : 0;
-    const avgReliability =
-      items.length > 0
-        ? items.reduce((acc, i) => acc + i.secondaryMetric, 0) / items.length
-        : 0;
-    const activeCount = items.filter(i => i.status === 'Active').length;
+    const activeItems = items.filter(i => i.status === 'Active');
+    const totalVolume = activeItems.reduce((acc, i) => acc + i.primaryMetric, 0);
+    const totalSamples = items.reduce((acc, i) => acc + i.sampleSize, 0);
+    const totalConv = items.reduce((acc, i) => acc + i.conversions, 0);
+    const convRate = totalSamples > 0 ? (totalConv / totalSamples) * 100 : 0;
+
+    // Two-proportion Z-score calculation between first two cohorts
+    const a = items[0];
+    const b = items[1];
+    let zScore = 0;
+    if (a && b && a.sampleSize > 0 && b.sampleSize > 0) {
+      const p1 = a.conversions / a.sampleSize;
+      const p2 = b.conversions / b.sampleSize;
+      const pPool = (a.conversions + b.conversions) / (a.sampleSize + b.sampleSize);
+      const se = Math.sqrt(pPool * (1 - pPool) * (1 / a.sampleSize + 1 / b.sampleSize));
+      zScore = se > 0 ? Math.abs(p2 - p1) / se : 0;
+    }
+
     return {
       totalVolume,
-      avgConversion: avgConversion.toFixed(2),
-      avgReliability: avgReliability.toFixed(1),
-      activeCount
+      convRate: convRate.toFixed(2),
+      zScore: zScore.toFixed(2),
+      isSignificant: zScore >= 1.96,
+      activeCount: activeItems.length,
     };
   }, [items]);
 
@@ -110,27 +169,36 @@ export function KnowledgeBaseBuilder() {
   function handleCreateRecord(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!newName.trim()) return;
-    const numericVal = Math.max(0, Number(newPrimary) || 0);
+    const parentNode = items.find(i => i.id === newParentId) ?? null;
+    const siblingCount = items.filter(i => i.parentId === newParentId).length;
+    const isTwoUpPassup = siblingCount < 2 && parentNode !== null;
+
     const created: RecordItem = {
       id: `AM-21${String(items.length + 1).padStart(2, '0')}`,
+      parentId: parentNode ? parentNode.id : null,
+      depth: parentNode ? parentNode.depth + 1 : 0,
       name: newName.trim(),
       category: newCategory,
       status: 'Active',
-      primaryMetric: numericVal,
-      secondaryMetric: 99.0,
-      conversionRate: 15.2,
+      primaryMetric: Math.max(0, Number(newPrimary) || 0),
+      sampleSize: 1000,
+      conversions: 165,
+      retryAttempts: 0,
+      passupRecipient: isTwoUpPassup
+        ? `Passed Up to ${parentNode?.parentId ?? parentNode?.id} (Two-Up Sale #${siblingCount + 1})`
+        : `Retained by ${parentNode?.id ?? 'Root'} (Direct 75%)`,
       updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC',
-      notes: 'Created via interactive Knowledge Base Builder control panel.'
+      notes: 'Persisted to localStorage with Two-Up passup & dynamic compression evaluation.',
     };
-    setItems(prev => [created, ...prev]);
+    persistItems([created, ...items]);
     setSelectedId(created.id);
     setNewName('');
   }
 
   function handleCycleStatus(id: string) {
-    const order: RecordItem['status'][] = ['Active', 'Pending', 'Completed', 'Flagged'];
-    setItems(prev =>
-      prev.map(item => {
+    const order: RecordItem['status'][] = ['Active', 'Pending', 'Completed', 'Compressed'];
+    persistItems(
+      items.map(item => {
         if (item.id !== id) return item;
         const idx = order.indexOf(item.status);
         const next = order[(idx + 1) % order.length];
@@ -157,53 +225,65 @@ export function KnowledgeBaseBuilder() {
               Searchable knowledge base with category hierarchy, semantic relevance scoring, and helpfulness feedback
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <label htmlFor="search-input-21" className="sr-only">Search records</label>
             <input
+              id="search-input-21"
               type="search"
               value={query}
               onChange={e => setQuery(e.target.value)}
               placeholder="Search ID, name, category..."
-              aria-label="Search records"
               className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
             />
+            <label htmlFor="status-filter-21" className="sr-only">Filter by status</label>
             <select
+              id="status-filter-21"
               value={statusFilter}
               onChange={e => setStatusFilter(e.target.value)}
-              aria-label="Filter by status"
               className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
             >
               <option value="ALL">All Statuses</option>
               <option value="Active">Active</option>
               <option value="Pending">Pending</option>
               <option value="Completed">Completed</option>
-              <option value="Flagged">Flagged</option>
+              <option value="Compressed">Compressed</option>
             </select>
+            <label htmlFor="compression-toggle-21" className="flex items-center gap-2 text-xs text-[#D4AF37] cursor-pointer">
+              <input
+                id="compression-toggle-21"
+                type="checkbox"
+                checked={enableCompression}
+                onChange={e => setEnableCompression(e.target.checked)}
+                className="accent-[#D4AF37]"
+              />
+              Dynamic Compression
+            </label>
           </div>
         </header>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Total Throughput Volume</p>
+            <p className="text-xs uppercase text-[#A3A3A3]">Active Volume (Persisted)</p>
             <p className="text-2xl font-bold text-[#D4AF37] mt-1">
               ${summary.totalVolume.toLocaleString()}
             </p>
           </div>
           <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Active Streams</p>
+            <p className="text-xs uppercase text-[#A3A3A3]">Active Nodes / Streams</p>
             <p className="text-2xl font-bold text-[#22C55E] mt-1">
               {summary.activeCount} / {items.length}
             </p>
           </div>
           <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Mean Conversion / Lift</p>
+            <p className="text-xs uppercase text-[#A3A3A3]">Aggregate Conversion Rate</p>
             <p className="text-2xl font-bold text-[#F5F5F5] mt-1">
-              {summary.avgConversion}%
+              {summary.convRate}%
             </p>
           </div>
           <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">System SLA Reliability</p>
+            <p className="text-xs uppercase text-[#A3A3A3]">Z-Score Significance</p>
             <p className="text-2xl font-bold text-[#3B82F6] mt-1">
-              {summary.avgReliability}%
+              Z = {summary.zScore} ({summary.isSignificant ? '95%+ Conf.' : 'Collecting'})
             </p>
           </div>
         </div>
@@ -211,54 +291,77 @@ export function KnowledgeBaseBuilder() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-4">
             <h2 className="text-lg font-semibold text-[#D4AF37]">
-              Live Operational Matrix ({filteredItems.length})
+              Hierarchical Matrix & Pass-Up Routing ({filteredItems.length})
             </h2>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-[#262626] text-[#A3A3A3]">
-                    <th className="py-2 pr-3">ID</th>
-                    <th className="py-2 pr-3">Workflow Name</th>
-                    <th className="py-2 pr-3">Category</th>
-                    <th className="py-2 pr-3">Metric</th>
-                    <th className="py-2 pr-3">Conv %</th>
+                    <th className="py-2 pr-3">Node / Depth</th>
+                    <th className="py-2 pr-3">Name & Parent Link</th>
+                    <th className="py-2 pr-3">Pass-Up / Routing</th>
+                    <th className="py-2 pr-3">Volume</th>
                     <th className="py-2 pr-3">Status</th>
                     <th className="py-2">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredItems.map(item => (
-                    <tr
-                      key={item.id}
-                      onClick={() => setSelectedId(item.id)}
-                      className={`border-b border-[#1A1A1A] cursor-pointer transition-colors ${
-                        selectedItem?.id === item.id ? 'bg-[#171717]' : 'hover:bg-[#121212]'
-                      }`}
-                    >
-                      <td className="py-3 pr-3 font-mono text-xs text-[#D4AF37]">{item.id}</td>
-                      <td className="py-3 pr-3 font-medium text-[#F5F5F5]">{item.name}</td>
-                      <td className="py-3 pr-3 text-[#A3A3A3]">{item.category}</td>
-                      <td className="py-3 pr-3 font-mono">${item.primaryMetric.toLocaleString()}</td>
-                      <td className="py-3 pr-3 font-mono text-[#22C55E]">{item.conversionRate}%</td>
-                      <td className="py-3 pr-3">
-                        <span className="px-2 py-0.5 rounded text-xs font-semibold bg-[#1F1F1F] text-[#D4AF37] border border-[#D4AF37]/40">
-                          {item.status}
-                        </span>
-                      </td>
-                      <td className="py-3">
-                        <button
-                          type="button"
-                          onClick={ev => {
-                            ev.stopPropagation();
-                            handleCycleStatus(item.id);
-                          }}
-                          className="px-2.5 py-1 rounded bg-[#D4AF37] text-[#0A0A0A] font-semibold text-xs hover:bg-[#E8C547]"
-                        >
-                          Cycle Status
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {filteredItems.map(item => {
+                    const effectiveDepth =
+                      enableCompression && item.parentId
+                        ? Math.max(0, item.depth - (items.find(p => p.id === item.parentId)?.status === 'Compressed' ? 1 : 0))
+                        : item.depth;
+                    const rate = item.sampleSize > 0 ? ((item.conversions / item.sampleSize) * 100).toFixed(1) : '0.0';
+                    return (
+                      <tr
+                        key={item.id}
+                        tabIndex={0}
+                        role="button"
+                        aria-pressed={selectedItem?.id === item.id}
+                        onClick={() => setSelectedId(item.id)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setSelectedId(item.id);
+                          }
+                        }}
+                        className={`border-b border-[#1A1A1A] cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-[#D4AF37] ${
+                          selectedItem?.id === item.id ? 'bg-[#171717]' : 'hover:bg-[#121212]'
+                        }`}
+                      >
+                        <td className="py-3 pr-3 font-mono text-xs text-[#D4AF37]">
+                          <span style={{ paddingLeft: `${effectiveDepth * 12}px` }}>
+                            {effectiveDepth > 0 ? '└─ ' : ''}{item.id} (L{effectiveDepth})
+                          </span>
+                        </td>
+                        <td className="py-3 pr-3">
+                          <p className="font-medium text-[#F5F5F5]">{item.name}</p>
+                          <p className="text-xs text-[#A3A3A3]">
+                            Parent: {item.parentId ?? 'ROOT'} • Conv: {rate}% (Retry #{item.retryAttempts})
+                          </p>
+                        </td>
+                        <td className="py-3 pr-3 text-xs text-[#A3A3A3]">{item.passupRecipient}</td>
+                        <td className="py-3 pr-3 font-mono">${item.primaryMetric.toLocaleString()}</td>
+                        <td className="py-3 pr-3">
+                          <span className="px-2 py-0.5 rounded text-xs font-semibold bg-[#1F1F1F] text-[#D4AF37] border border-[#D4AF37]/40">
+                            {item.status}
+                          </span>
+                        </td>
+                        <td className="py-3">
+                          <button
+                            type="button"
+                            onClick={ev => {
+                              ev.stopPropagation();
+                              handleCycleStatus(item.id);
+                            }}
+                            className="px-2.5 py-1 rounded bg-[#D4AF37] text-[#0A0A0A] font-semibold text-xs hover:bg-[#E8C547]"
+                          >
+                            Cycle Status
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -266,11 +369,14 @@ export function KnowledgeBaseBuilder() {
 
           <aside className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-5">
             <div>
-              <h2 className="text-lg font-semibold text-[#D4AF37]">Inspector & Quick Add</h2>
+              <h2 className="text-lg font-semibold text-[#D4AF37]">Node Inspector & Persistent Creator</h2>
               {selectedItem && (
                 <div className="mt-3 p-3 rounded-lg bg-[#141414] border border-[#262626] space-y-1.5 text-xs">
-                  <p className="text-[#D4AF37] font-mono font-bold">{selectedItem.id}</p>
+                  <p className="text-[#D4AF37] font-mono font-bold">
+                    {selectedItem.id} (Parent: {selectedItem.parentId ?? 'ROOT'})
+                  </p>
                   <p className="text-sm font-semibold text-[#F5F5F5]">{selectedItem.name}</p>
+                  <p className="text-[#22C55E]">Routing: {selectedItem.passupRecipient}</p>
                   <p className="text-[#A3A3A3]">{selectedItem.notes}</p>
                   <p className="text-[#666666]">Updated: {selectedItem.updatedAt}</p>
                 </div>
@@ -278,21 +384,42 @@ export function KnowledgeBaseBuilder() {
             </div>
 
             <form onSubmit={handleCreateRecord} className="space-y-3 border-t border-[#262626] pt-4">
-              <h3 className="text-sm font-semibold text-[#F5F5F5]">Create New Entry</h3>
+              <h3 className="text-sm font-semibold text-[#F5F5F5]">Add Child Node / Entry</h3>
               <div>
-                <label className="block text-xs text-[#A3A3A3] mb-1">Entry Name</label>
+                <label htmlFor="entry-name-21" className="block text-xs text-[#A3A3A3] mb-1">
+                  Entry / Node Name
+                </label>
                 <input
+                  id="entry-name-21"
                   type="text"
                   required
                   value={newName}
                   onChange={e => setNewName(e.target.value)}
-                  placeholder="Enter workflow or campaign title..."
+                  placeholder="Enter node or workflow title..."
                   className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
                 />
               </div>
               <div>
-                <label className="block text-xs text-[#A3A3A3] mb-1">Category</label>
+                <label htmlFor="parent-node-21" className="block text-xs text-[#A3A3A3] mb-1">
+                  Parent Sponsor / Upstream Node
+                </label>
                 <select
+                  id="parent-node-21"
+                  value={newParentId}
+                  onChange={e => setNewParentId(e.target.value)}
+                  className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+                >
+                  {items.map(i => (
+                    <option key={i.id} value={i.id}>{i.id} — {i.name.slice(0, 28)}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="entry-cat-21" className="block text-xs text-[#A3A3A3] mb-1">
+                  Category
+                </label>
+                <select
+                  id="entry-cat-21"
                   value={newCategory}
                   onChange={e => setNewCategory(e.target.value)}
                   className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
@@ -304,8 +431,11 @@ export function KnowledgeBaseBuilder() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-[#A3A3A3] mb-1">Projected Value (USD)</label>
+                <label htmlFor="entry-val-21" className="block text-xs text-[#A3A3A3] mb-1">
+                  Projected Value (USD)
+                </label>
                 <input
+                  id="entry-val-21"
                   type="number"
                   value={newPrimary}
                   onChange={e => setNewPrimary(e.target.value)}
