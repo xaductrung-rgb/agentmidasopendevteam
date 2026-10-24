@@ -41,6 +41,25 @@ const DEFAULT_LINKS: ReferralLinkItem[] = [
   }
 ];
 
+function parseHttpUrl(raw: string): URL | null {
+  try {
+    const parsed = new URL(raw.trim());
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed;
+    }
+  } catch {}
+  return null;
+}
+
+function buildTrackingUrl(link: ReferralLinkItem): string {
+  const parsed = parseHttpUrl(link.destinationUrl);
+  if (!parsed) return link.destinationUrl;
+  parsed.searchParams.set('ref', link.campaignSlug);
+  parsed.searchParams.set('utm_source', link.utmSource);
+  parsed.searchParams.set('utm_medium', link.utmMedium);
+  return parsed.toString();
+}
+
 function isValidLink(item: unknown): item is ReferralLinkItem {
   if (!item || typeof item !== 'object') return false;
   const r = item as Record<string, unknown>;
@@ -48,6 +67,7 @@ function isValidLink(item: unknown): item is ReferralLinkItem {
     typeof r.id === 'string' &&
     typeof r.campaignSlug === 'string' &&
     typeof r.destinationUrl === 'string' &&
+    parseHttpUrl(r.destinationUrl) !== null &&
     typeof r.clicks === 'number' &&
     r.clicks >= 0 &&
     typeof r.conversions === 'number' &&
@@ -120,15 +140,16 @@ export const ReferralLinkManager: React.FC<ReferralLinkManagerProps> = ({
     e.preventDefault();
     if (saveLockRef.current) return;
     const slug = campaignSlug.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+    const parsedUrl = parseHttpUrl(destinationUrl);
     const comm = Number(commissionInput.trim());
-    if (!slug || !destinationUrl.trim().startsWith('http') || !Number.isFinite(comm) || comm < 0) {
-      setErrorMsg('Enter a valid campaign slug, HTTP/HTTPS destination URL, and non-negative commission.');
+    if (!slug || !parsedUrl || !Number.isFinite(comm) || comm < 0 || comm > 1_000_000) {
+      setErrorMsg('Enter a valid campaign slug, valid http:// or https:// destination URL, and non-negative commission.');
       return;
     }
     const created: ReferralLinkItem = {
       id: `ref-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       campaignSlug: slug,
-      destinationUrl: destinationUrl.trim(),
+      destinationUrl: parsedUrl.toString(),
       utmSource: utmSource.trim() || 'direct',
       utmMedium: utmMedium.trim() || 'referral',
       clicks: 0,
@@ -141,10 +162,22 @@ export const ReferralLinkManager: React.FC<ReferralLinkManagerProps> = ({
     }
   };
 
+  const recordClick = async (id: string) => {
+    if (saveLockRef.current) return;
+    const next = linksRef.current.map(l => (l.id === id ? { ...l, clicks: l.clicks + 1 } : l));
+    await persistLinks(next, 'Recorded referral link click.');
+  };
+
   const recordConversion = async (id: string) => {
     if (saveLockRef.current) return;
+    const target = linksRef.current.find(l => l.id === id);
+    if (!target) return;
+    if (target.conversions >= target.clicks) {
+      setErrorMsg('Cannot log a conversion exceeding total recorded clicks; log a click first.');
+      return;
+    }
     const next = linksRef.current.map(l =>
-      l.id === id ? { ...l, clicks: l.clicks + 1, conversions: l.conversions + 1 } : l
+      l.id === id ? { ...l, conversions: l.conversions + 1 } : l
     );
     await persistLinks(next, 'Recorded attributed referral conversion.');
   };
@@ -196,7 +229,7 @@ export const ReferralLinkManager: React.FC<ReferralLinkManagerProps> = ({
 
         <div className="space-y-3">
           {links.map(l => {
-            const fullUrl = `${l.destinationUrl}?ref=${encodeURIComponent(l.campaignSlug)}&utm_source=${encodeURIComponent(l.utmSource)}&utm_medium=${encodeURIComponent(l.utmMedium)}`;
+            const fullUrl = buildTrackingUrl(l);
             const convRate = l.clicks > 0 ? ((l.conversions / l.clicks) * 100).toFixed(1) : '0.0';
             return (
               <div key={l.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap justify-between items-center gap-4">
@@ -207,15 +240,26 @@ export const ReferralLinkManager: React.FC<ReferralLinkManagerProps> = ({
                     Clicks: {l.clicks} · Conversions: {l.conversions} ({convRate}%) · Payout: ${(l.conversions * l.commissionPerConversionUsd).toLocaleString()}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  aria-label={`Record conversion for ${l.campaignSlug}`}
-                  disabled={isSaving}
-                  onClick={() => void recordConversion(l.id)}
-                  className="px-3 py-1.5 rounded bg-zinc-800 text-xs text-[#D4AF37] font-bold"
-                >
-                  + Log Conversion
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    aria-label={`Record click for ${l.campaignSlug}`}
+                    disabled={isSaving}
+                    onClick={() => void recordClick(l.id)}
+                    className="px-3 py-1.5 rounded bg-zinc-800 text-xs text-white font-bold"
+                  >
+                    + Log Click
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Record conversion for ${l.campaignSlug}`}
+                    disabled={isSaving}
+                    onClick={() => void recordConversion(l.id)}
+                    className="px-3 py-1.5 rounded bg-zinc-800 text-xs text-[#D4AF37] font-bold"
+                  >
+                    + Log Conversion
+                  </button>
+                </div>
               </div>
             );
           })}
