@@ -1,177 +1,285 @@
-'use client';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-
-export interface MonthlyRevenueSnapshot {
-  month: string;
-  startingMrr: number;
+export interface RevenueSnapshot {
+  id: string;
+  periodLabel: string;
   newMrr: number;
   expansionMrr: number;
   churnedMrr: number;
   activeCustomers: number;
+  arpu: number;
+  grossMarginPct: number;
 }
 
 export interface RevenueDashboardProps {
-  initialSnapshots?: MonthlyRevenueSnapshot[];
-  endpointUrl?: string;
-  pollIntervalMs?: number;
-  onFetchSnapshots?: () => Promise<MonthlyRevenueSnapshot[]>;
   storageKey?: string;
+  initialSnapshots?: RevenueSnapshot[];
+  liveEndpoint?: string;
+  pollIntervalMs?: number;
+  onFetchSnapshots?: () => Promise<RevenueSnapshot[]>;
+  onChange?: (snapshots: RevenueSnapshot[]) => void | Promise<void>;
 }
 
-const DEFAULT_SNAPSHOTS: MonthlyRevenueSnapshot[] = [
-  { month: '2026-07', startingMrr: 44100, newMrr: 18900, expansionMrr: 4400, churnedMrr: 1450, activeCustomers: 230 },
-  { month: '2026-08', startingMrr: 65950, newMrr: 24500, expansionMrr: 6200, churnedMrr: 1800, activeCustomers: 294 },
-  { month: '2026-09', startingMrr: 94850, newMrr: 31200, expansionMrr: 8500, churnedMrr: 2100, activeCustomers: 368 },
-  { month: '2026-10', startingMrr: 132450, newMrr: 39800, expansionMrr: 11400, churnedMrr: 2350, activeCustomers: 452 },
+const DEFAULT_SNAPSHOTS: RevenueSnapshot[] = [
+  { id: 'rev-1', periodLabel: '2026-07', newMrr: 42000, expansionMrr: 8500, churnedMrr: 3100, activeCustomers: 310, arpu: 152, grossMarginPct: 82 },
+  { id: 'rev-2', periodLabel: '2026-08', newMrr: 46500, expansionMrr: 9400, churnedMrr: 2900, activeCustomers: 342, arpu: 155, grossMarginPct: 83 },
+  { id: 'rev-3', periodLabel: '2026-09', newMrr: 51200, expansionMrr: 11200, churnedMrr: 2700, activeCustomers: 380, arpu: 157, grossMarginPct: 84 },
+  { id: 'rev-4', periodLabel: '2026-10', newMrr: 58400, expansionMrr: 13600, churnedMrr: 2400, activeCustomers: 425, arpu: 164, grossMarginPct: 85 }
 ];
 
-export function RevenueDashboard({
+export const RevenueDashboard: React.FC<RevenueDashboardProps> = ({
+  storageKey = 'agentmidas_revenue_dashboard_v2',
   initialSnapshots = DEFAULT_SNAPSHOTS,
-  endpointUrl = '/api/revenue/snapshots',
+  liveEndpoint,
   pollIntervalMs = 30000,
   onFetchSnapshots,
-  storageKey = 'agentmidas_revenue_snapshots_v2',
-}: RevenueDashboardProps = {}) {
-  const [snapshots, setSnapshots] = useState<MonthlyRevenueSnapshot[]>(initialSnapshots);
-  const [selectedMonth, setSelectedMonth] = useState<string>(
-    initialSnapshots[initialSnapshots.length - 1]?.month ?? '2026-10'
-  );
-  const [lastSyncedAt, setLastSyncedAt] = useState<string>('Live feed ready');
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
-
-  const syncFromLiveSource = useCallback(async () => {
-    setIsSyncing(true);
+  onChange
+}) => {
+  const [snapshots, setSnapshots] = useState<RevenueSnapshot[]>(() => {
     try {
-      if (onFetchSnapshots) {
-        const remote = await onFetchSnapshots();
-        if (Array.isArray(remote) && remote.length > 0) {
-          setSnapshots(remote);
-          setSelectedMonth(remote[remote.length - 1].month);
-          window.localStorage.setItem(storageKey, JSON.stringify(remote));
-          setLastSyncedAt(new Date().toLocaleTimeString());
-          setIsSyncing(false);
-          return;
-        }
-      }
-      if (endpointUrl) {
-        const res = await fetch(endpointUrl, { headers: { Accept: 'application/json' } });
-        if (res.ok) {
-          const data = (await res.json()) as MonthlyRevenueSnapshot[];
-          if (Array.isArray(data) && data.length > 0) {
-            setSnapshots(data);
-            setSelectedMonth(data[data.length - 1].month);
-            window.localStorage.setItem(storageKey, JSON.stringify(data));
-          }
-        }
-      }
-      setLastSyncedAt(new Date().toLocaleTimeString());
-    } catch {
-      setLastSyncedAt(`Offline cache (${new Date().toLocaleTimeString()})`);
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [endpointUrl, onFetchSnapshots, storageKey]);
-
-  useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(storageKey);
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
       if (saved) {
-        const parsed = JSON.parse(saved) as MonthlyRevenueSnapshot[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setSnapshots(parsed);
-          setSelectedMonth(parsed[parsed.length - 1].month);
-        }
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch {}
-    void syncFromLiveSource();
-    if (pollIntervalMs > 0) {
-      const timer = window.setInterval(() => {
-        void syncFromLiveSource();
-      }, pollIntervalMs);
-      return () => window.clearInterval(timer);
-    }
-    return undefined;
-  }, [pollIntervalMs, storageKey, syncFromLiveSource]);
+    return initialSnapshots.length > 0 ? initialSnapshots : DEFAULT_SNAPSHOTS;
+  });
 
-  const current = useMemo(
-    () => snapshots.find(s => s.month === selectedMonth) ?? snapshots[snapshots.length - 1],
-    [snapshots, selectedMonth]
-  );
+  const [rangeFilter, setRangeFilter] = useState<'ALL' | 'LAST_3' | 'LATEST'>('ALL');
+  const [liveSyncEnabled, setLiveSyncEnabled] = useState<boolean>(Boolean(onFetchSnapshots || liveEndpoint));
+  const [lastSyncedAt, setLastSyncedAt] = useState<string>('Not synced yet');
+  const [syncError, setSyncError] = useState<string>('');
+  const [periodLabel, setPeriodLabel] = useState('2026-11');
+  const [newMrr, setNewMrr] = useState('62000');
+  const [expansionMrr, setExpansionMrr] = useState('14500');
+  const [churnedMrr, setChurnedMrr] = useState('2100');
+  const [activeCustomers, setActiveCustomers] = useState('460');
+
+  const persistSnapshots = useCallback(async (next: RevenueSnapshot[]) => {
+    const safeNext = next.length > 0 ? next : DEFAULT_SNAPSHOTS;
+    const prev = snapshots;
+    setSnapshots(safeNext);
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(safeNext));
+      }
+      if (onChange) {
+        await onChange(safeNext);
+      }
+    } catch {
+      setSnapshots(prev);
+      setSyncError('Failed to persist snapshots; rolled back to previous state.');
+    }
+  }, [snapshots, storageKey, onChange]);
+
+  const refreshLiveMetrics = useCallback(async () => {
+    setSyncError('');
+    let fetched: RevenueSnapshot[] | null = null;
+    let callbackFailed = false;
+
+    if (onFetchSnapshots) {
+      try {
+        const data = await onFetchSnapshots();
+        if (Array.isArray(data) && data.length > 0) {
+          fetched = data;
+        } else {
+          callbackFailed = true;
+        }
+      } catch {
+        callbackFailed = true;
+      }
+    }
+
+    if (!fetched && liveEndpoint) {
+      try {
+        const res = await fetch(liveEndpoint);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          fetched = data;
+        } else {
+          throw new Error('Empty payload from liveEndpoint');
+        }
+      } catch (err: any) {
+        setSyncError(`Live refresh failed (${err?.message || 'endpoint error'}).`);
+        return;
+      }
+    }
+
+    if (callbackFailed && !fetched) {
+      setSyncError('Live refresh failed: onFetchSnapshots rejected or returned empty data.');
+      return;
+    }
+
+    if (fetched) {
+      await persistSnapshots(fetched);
+      setLastSyncedAt(new Date().toISOString().slice(11, 19) + ' UTC');
+    } else {
+      setSyncError('No live data source (onFetchSnapshots or liveEndpoint) configured.');
+    }
+  }, [onFetchSnapshots, liveEndpoint, persistSnapshots]);
+
+  useEffect(() => {
+    if (!liveSyncEnabled || (!onFetchSnapshots && !liveEndpoint)) return;
+    void refreshLiveMetrics();
+    const timer = setInterval(() => {
+      void refreshLiveMetrics();
+    }, Math.max(5000, pollIntervalMs));
+    return () => clearInterval(timer);
+  }, [liveSyncEnabled, onFetchSnapshots, liveEndpoint, pollIntervalMs, refreshLiveMetrics]);
+
+  const safeSnapshots = snapshots.length > 0 ? snapshots : DEFAULT_SNAPSHOTS;
+
+  const visibleSnapshots = useMemo(() => {
+    if (rangeFilter === 'LATEST') return safeSnapshots.slice(-1);
+    if (rangeFilter === 'LAST_3') return safeSnapshots.slice(-3);
+    return safeSnapshots;
+  }, [safeSnapshots, rangeFilter]);
 
   const kpis = useMemo(() => {
-    const netNewMrr = current.newMrr + current.expansionMrr - current.churnedMrr;
-    const endingMrr = current.startingMrr + netNewMrr;
-    const arr = endingMrr * 12;
-    const grossChurnRateDecimal = current.startingMrr > 0 ? current.churnedMrr / current.startingMrr : 0;
-    const grossChurnRatePct = grossChurnRateDecimal * 100;
-    const arpu = current.activeCustomers > 0 ? endingMrr / current.activeCustomers : 0;
-    const ltv = grossChurnRateDecimal > 0 ? arpu / grossChurnRateDecimal : arpu * 24;
+    const current = visibleSnapshots[visibleSnapshots.length - 1] ?? DEFAULT_SNAPSHOTS[0];
+    const netMrr = current.newMrr + current.expansionMrr - current.churnedMrr;
+    const arr = netMrr * 12;
+    const grossPool = Math.max(1, current.newMrr + current.expansionMrr);
+    const churnRatePct = (current.churnedMrr / grossPool) * 100;
+    const monthlyChurnDecimal = Math.max(0.005, churnRatePct / 100);
+    const ltv = (current.arpu * (current.grossMarginPct / 100)) / monthlyChurnDecimal;
+    return { netMrr, arr, churnRatePct, ltv, activeCustomers: current.activeCustomers };
+  }, [visibleSnapshots]);
 
-    return {
-      startingMrr: current.startingMrr,
-      netNewMrr,
-      endingMrr,
-      arr,
-      grossChurnRatePct: grossChurnRatePct.toFixed(2),
-      arpu: arpu.toFixed(2),
-      ltv: ltv.toFixed(0),
+  const handleAddSnapshot = (e: React.FormEvent) => {
+    e.preventDefault();
+    const nMrr = Number(newMrr);
+    const eMrr = Number(expansionMrr);
+    const cMrr = Number(churnedMrr);
+    const cust = Number(activeCustomers);
+    if (!periodLabel.trim() || [nMrr, eMrr, cMrr, cust].some(v => Number.isNaN(v) || v < 0) || cust <= 0) {
+      setSyncError('Please enter a valid period label and positive numeric values.');
+      return;
+    }
+    const net = nMrr + eMrr - cMrr;
+    const created: RevenueSnapshot = {
+      id: `rev-${Date.now()}`,
+      periodLabel: periodLabel.trim(),
+      newMrr: nMrr,
+      expansionMrr: eMrr,
+      churnedMrr: cMrr,
+      activeCustomers: cust,
+      arpu: Math.round(net / cust),
+      grossMarginPct: 84
     };
-  }, [current]);
+    void persistSnapshots([...safeSnapshots, created]);
+  };
 
   return (
-    <section aria-label="Revenue Dashboard" className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans">
-      <div className="max-w-6xl mx-auto space-y-6">
-        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-[#262626] pb-4">
+    <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
+      <div className="max-w-7xl mx-auto space-y-6">
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-zinc-800 pb-4">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-[#D4AF37]">Executive Revenue Dashboard</h1>
-            <p className="text-sm text-[#A3A3A3]">Live-Polled MRR, ARR, Starting-MRR Churn & Customer LTV ({lastSyncedAt})</p>
+            <h1 className="text-2xl font-bold text-[#D4AF37]">Executive Revenue Dashboard (MRR / ARR / LTV)</h1>
+            <p className="text-sm text-zinc-400">Last Verified Sync: {lastSyncedAt}</p>
           </div>
           <div className="flex items-center gap-3">
+            <div className="flex gap-1" role="tablist" aria-label="Cohort Range Filter">
+              {(['ALL', 'LAST_3', 'LATEST'] as const).map(r => (
+                <button
+                  key={r}
+                  type="button"
+                  role="tab"
+                  aria-selected={rangeFilter === r}
+                  onClick={() => setRangeFilter(r)}
+                  className={`px-3 py-1 rounded text-xs font-bold ${
+                    rangeFilter === r ? 'bg-[#D4AF37] text-black' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'
+                  }`}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
-              onClick={() => void syncFromLiveSource()}
-              disabled={isSyncing}
-              className="px-3 py-2 rounded-lg bg-[#D4AF37] text-[#0A0A0A] font-bold text-xs hover:bg-[#E8C547]"
+              onClick={() => void refreshLiveMetrics()}
+              className="px-3 py-1.5 rounded bg-[#D4AF37] text-black text-xs font-bold"
             >
-              {isSyncing ? 'Syncing...' : 'Refresh Live Feed'}
+              Sync Live Source
             </button>
-            <label htmlFor="rev-period-select" className="sr-only">Reporting Period</label>
-            <select
-              id="rev-period-select"
-              value={selectedMonth}
-              onChange={e => setSelectedMonth(e.target.value)}
-              className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]"
-            >
-              {snapshots.map(s => (
-                <option key={s.month} value={s.month}>{s.month}</option>
-              ))}
-            </select>
+            <label className="flex items-center gap-1.5 text-xs text-zinc-300">
+              <input
+                type="checkbox"
+                checked={liveSyncEnabled}
+                onChange={e => setLiveSyncEnabled(e.target.checked)}
+              />
+              Auto-Poll
+            </label>
           </div>
         </header>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Ending MRR ({current.month})</p>
-            <p className="text-2xl font-bold text-[#D4AF37] mt-1">${kpis.endingMrr.toLocaleString()}</p>
-            <p className="text-xs text-[#22C55E] mt-1">Net New: +${kpis.netNewMrr.toLocaleString()}</p>
+        {syncError && (
+          <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">
+            {syncError}
           </div>
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Annual Recurring Revenue (ARR)</p>
-            <p className="text-2xl font-bold text-[#22C55E] mt-1">${kpis.arr.toLocaleString()}</p>
+        )}
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+            <div className="text-xs text-zinc-400">Net MRR</div>
+            <div className="text-2xl font-bold text-[#D4AF37]">${kpis.netMrr.toLocaleString()}</div>
           </div>
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Gross MRR Churn Rate</p>
-            <p className="text-2xl font-bold text-[#F59E0B] mt-1">{kpis.grossChurnRatePct}%</p>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+            <div className="text-xs text-zinc-400">Annualized ARR</div>
+            <div className="text-2xl font-bold text-emerald-400">${kpis.arr.toLocaleString()}</div>
           </div>
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Customer LTV (ARPU ${kpis.arpu})</p>
-            <p className="text-2xl font-bold text-[#3B82F6] mt-1">${Number(kpis.ltv).toLocaleString()}</p>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+            <div className="text-xs text-zinc-400">Gross Revenue Churn</div>
+            <div className="text-2xl font-bold text-amber-400">{kpis.churnRatePct.toFixed(2)}%</div>
+          </div>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+            <div className="text-xs text-zinc-400">Estimated Customer LTV</div>
+            <div className="text-2xl font-bold text-white">${Math.round(kpis.ltv).toLocaleString()}</div>
           </div>
         </div>
+
+        <form onSubmit={handleAddSnapshot} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 grid grid-cols-2 md:grid-cols-6 gap-3">
+          <input value={periodLabel} onChange={e => setPeriodLabel(e.target.value)} placeholder="Period (YYYY-MM)" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
+          <input type="number" value={newMrr} onChange={e => setNewMrr(e.target.value)} placeholder="New MRR" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
+          <input type="number" value={expansionMrr} onChange={e => setExpansionMrr(e.target.value)} placeholder="Expansion MRR" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
+          <input type="number" value={churnedMrr} onChange={e => setChurnedMrr(e.target.value)} placeholder="Churned MRR" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
+          <input type="number" value={activeCustomers} onChange={e => setActiveCustomers(e.target.value)} placeholder="Customers" className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
+          <button type="submit" className="bg-[#D4AF37] text-black font-bold text-xs rounded px-3 py-1.5">+ Record Period</button>
+        </form>
+
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-zinc-950 text-zinc-400 text-xs uppercase">
+              <tr>
+                <th className="p-3">Period</th>
+                <th className="p-3">New MRR</th>
+                <th className="p-3">Expansion</th>
+                <th className="p-3">Churned</th>
+                <th className="p-3">Net MRR</th>
+                <th className="p-3">Customers</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800">
+              {visibleSnapshots.map(s => (
+                <tr key={s.id}>
+                  <td className="p-3 font-mono text-[#D4AF37]">{s.periodLabel}</td>
+                  <td className="p-3">${s.newMrr.toLocaleString()}</td>
+                  <td className="p-3 text-emerald-400">+${s.expansionMrr.toLocaleString()}</td>
+                  <td className="p-3 text-red-400">-${s.churnedMrr.toLocaleString()}</td>
+                  <td className="p-3 font-bold">${(s.newMrr + s.expansionMrr - s.churnedMrr).toLocaleString()}</td>
+                  <td className="p-3">{s.activeCustomers}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </section>
+    </div>
   );
-}
+};
 
 export default RevenueDashboard;
