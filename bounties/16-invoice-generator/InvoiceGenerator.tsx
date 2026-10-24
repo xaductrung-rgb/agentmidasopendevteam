@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 
 export interface InvoiceLineItem {
   id: string;
@@ -45,8 +45,10 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
   const [priceInput, setPriceInput] = useState('250');
   const [checkoutUrl, setCheckoutUrl] = useState<string>('');
   const [checkoutError, setCheckoutError] = useState<string>('');
+  const invoiceVersionRef = useRef(0);
 
   const invalidateCheckout = () => {
+    invoiceVersionRef.current += 1;
     setCheckoutUrl('');
     setCheckoutError('');
   };
@@ -76,10 +78,12 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
 
   const generateNewInvoiceId = () => {
     invalidateCheckout();
-    setInvoiceNumber(`INV-2026-${Math.floor(1000 + Math.random() * 9000)}`);
+    const currentYear = new Date().getUTCFullYear();
+    setInvoiceNumber(`INV-${currentYear}-${Math.floor(1000 + Math.random() * 9000)}`);
   };
 
   const handleCreateCheckoutSession = async () => {
+    const reqVersion = invoiceVersionRef.current;
     setCheckoutError('');
     const payload: InvoicePayload = {
       invoiceNumber,
@@ -96,12 +100,15 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
     if (onCreateStripeCheckout) {
       try {
         const res = await onCreateStripeCheckout(payload);
+        if (reqVersion !== invoiceVersionRef.current) return;
         if (res && res.checkoutUrl) {
           setCheckoutUrl(res.checkoutUrl);
           return;
         }
       } catch {
-        setCheckoutError('Failed to create Stripe Checkout session via callback.');
+        if (reqVersion === invoiceVersionRef.current) {
+          setCheckoutError('Failed to create Stripe Checkout session via callback.');
+        }
         return;
       }
     }
@@ -115,17 +122,22 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
+        if (reqVersion !== invoiceVersionRef.current) return;
         if (data?.checkoutUrl) {
           setCheckoutUrl(data.checkoutUrl);
           return;
         }
       } catch {
-        setCheckoutError('Failed to create Stripe Checkout session from endpoint.');
+        if (reqVersion === invoiceVersionRef.current) {
+          setCheckoutError('Failed to create Stripe Checkout session from endpoint.');
+        }
         return;
       }
     }
 
-    setCheckoutError('Connect onCreateStripeCheckout or stripeCheckoutEndpoint to generate a live Stripe Checkout Session link.');
+    if (reqVersion === invoiceVersionRef.current) {
+      setCheckoutError('Connect onCreateStripeCheckout or stripeCheckoutEndpoint to generate a live Stripe Checkout Session link.');
+    }
   };
 
   return (
@@ -145,64 +157,17 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-            <input
-              aria-label="Invoice Number"
-              value={invoiceNumber}
-              onChange={e => {
-                invalidateCheckout();
-                setInvoiceNumber(e.target.value);
-              }}
-              className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
-            />
-            <input
-              aria-label="Client Name"
-              value={clientName}
-              onChange={e => {
-                invalidateCheckout();
-                setClientName(e.target.value);
-              }}
-              className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
-            />
-            <input
-              aria-label="Client Email"
-              value={clientEmail}
-              onChange={e => {
-                invalidateCheckout();
-                setClientEmail(e.target.value);
-              }}
-              className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
-            />
-            <input
-              aria-label="Tax Rate (%)"
-              type="number"
-              min={0}
-              max={100}
-              step="0.1"
-              value={taxRatePct}
-              onChange={e => {
-                invalidateCheckout();
-                setTaxRatePct(Math.max(0, Number(e.target.value)));
-              }}
-              className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
-            />
-            <input
-              aria-label="Discount ($)"
-              type="number"
-              min={0}
-              step="0.01"
-              value={discountAmount}
-              onChange={e => {
-                invalidateCheckout();
-                setDiscountAmount(Math.max(0, Number(e.target.value)));
-              }}
-              className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
-            />
+            <input aria-label="Invoice Number" value={invoiceNumber} onChange={e => { invalidateCheckout(); setInvoiceNumber(e.target.value); }} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+            <input aria-label="Client Name" value={clientName} onChange={e => { invalidateCheckout(); setClientName(e.target.value); }} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+            <input aria-label="Client Email" value={clientEmail} onChange={e => { invalidateCheckout(); setClientEmail(e.target.value); }} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+            <input aria-label="Tax Rate (%)" type="number" min={0} max={100} step="0.1" value={taxRatePct} onChange={e => { invalidateCheckout(); setTaxRatePct(Math.max(0, Number(e.target.value))); }} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+            <input aria-label="Discount ($)" type="number" min={0} step="0.01" value={discountAmount} onChange={e => { invalidateCheckout(); setDiscountAmount(Math.max(0, Number(e.target.value))); }} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
           </div>
 
           <form onSubmit={handleAddLine} className="flex flex-wrap gap-2">
-            <input value={descInput} onChange={e => setDescInput(e.target.value)} placeholder="Line Item Description" className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
-            <input type="number" min={1} value={qtyInput} onChange={e => setQtyInput(e.target.value)} placeholder="Qty" className="w-20 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
-            <input type="number" min={0} step="0.01" value={priceInput} onChange={e => setPriceInput(e.target.value)} placeholder="Unit Price" className="w-28 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+            <input aria-label="Line Item Description" value={descInput} onChange={e => setDescInput(e.target.value)} placeholder="Line Item Description" className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+            <input aria-label="Line Item Quantity" type="number" min={1} value={qtyInput} onChange={e => setQtyInput(e.target.value)} placeholder="Qty" className="w-20 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+            <input aria-label="Line Item Unit Price" type="number" min={0} step="0.01" value={priceInput} onChange={e => setPriceInput(e.target.value)} placeholder="Unit Price" className="w-28 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
             <button type="submit" className="bg-[#D4AF37] text-black font-bold text-xs px-4 py-1.5 rounded">+ Add Line</button>
           </form>
 
@@ -214,7 +179,6 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
           </div>
         </div>
 
-        {/* High-Contrast Printable Invoice Sheet */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 space-y-6 print:bg-white print:text-black print:border-zinc-300">
           <div className="flex justify-between items-start border-b border-zinc-800 print:border-zinc-300 pb-4">
             <div>
