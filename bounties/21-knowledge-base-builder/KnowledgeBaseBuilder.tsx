@@ -1,185 +1,256 @@
-'use client';
-
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useState, useMemo } from 'react';
 
 export interface KBArticle {
   id: string;
   title: string;
-  category: 'Getting Started' | 'Affiliate & Billing' | 'API & Security';
+  parentCategory: string;
+  subCategory: string;
+  tags: string[];
   body: string;
   helpfulYes: number;
   helpfulNo: number;
 }
 
+export interface KnowledgeBaseBuilderProps {
+  storageKey?: string;
+  initialArticles?: KBArticle[];
+  onChange?: (articles: KBArticle[]) => void | Promise<void>;
+}
+
+const SYNONYM_MAP: Record<string, string[]> = {
+  payout: ['stripe', 'commission', 'settlement', 'withdrawal', 'payment'],
+  webhook: ['hmac', 'signature', 'callback', 'event'],
+  auth: ['key', 'token', 'jwt', 'login', 'permission']
+};
+
 const DEFAULT_ARTICLES: KBArticle[] = [
   {
-    id: 'kb-1',
-    title: 'How the 75% Two-Up Affiliate Commission Works',
-    category: 'Affiliate & Billing',
-    body: 'Every affiliate passes up their first 2 sales to their sponsor and keeps 75% recurring commissions on sale #3 through infinity.',
-    helpfulYes: 48,
-    helpfulNo: 2,
+    id: 'KB-101',
+    title: 'Configuring Two-Up Commission Pass-Up Rules',
+    parentCategory: 'Billing & Payouts',
+    subCategory: 'Two-Up Commissions',
+    tags: ['payout', 'genealogy', 'commission'],
+    body: 'Learn how sales #1 and #2 pass up to the qualified sponsor and unlock direct team lines.',
+    helpfulYes: 28,
+    helpfulNo: 2
   },
   {
-    id: 'kb-2',
-    title: 'Zero-Dependency Security & CLA Compliance',
-    category: 'API & Security',
-    body: 'All Agent Midas modules use strict TypeScript and pass the 6-layer security pipeline without third-party runtime packages.',
-    helpfulYes: 35,
-    helpfulNo: 1,
-  },
+    id: 'KB-102',
+    title: 'Verifying Webhook HMAC-SHA256 Signatures',
+    parentCategory: 'SDK & API',
+    subCategory: 'Webhooks & Security',
+    tags: ['webhook', 'hmac', 'security'],
+    body: 'Validate X-Midas-Signature headers using your webhook signing secret to prevent replay attacks.',
+    helpfulYes: 41,
+    helpfulNo: 1
+  }
 ];
 
-const STORAGE_KEY = 'agentmidas_kb_articles_v2';
-
-export function KnowledgeBaseBuilder() {
-  const [articles, setArticles] = useState<KBArticle[]>(DEFAULT_ARTICLES);
-  const [search, setSearch] = useState<string>('');
-  const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
-  const [newTitle, setNewTitle] = useState<string>('');
-  const [newCategory, setNewCategory] = useState<KBArticle['category']>('Getting Started');
-  const [newBody, setNewBody] = useState<string>('');
-
-  useEffect(() => {
+export const KnowledgeBaseBuilder: React.FC<KnowledgeBaseBuilderProps> = ({
+  storageKey = 'agentmidas_kb_builder_v2',
+  initialArticles = DEFAULT_ARTICLES,
+  onChange
+}) => {
+  const [articles, setArticles] = useState<KBArticle[]>(() => {
     try {
-      const saved = window.localStorage.getItem(STORAGE_KEY);
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
       if (saved) {
-        const parsed = JSON.parse(saved) as KBArticle[];
-        if (Array.isArray(parsed) && parsed.length > 0) setArticles(parsed);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch {}
-  }, []);
+    return initialArticles;
+  });
 
-  const persist = (next: KBArticle[]) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedParentCat, setSelectedParentCat] = useState<string>('ALL');
+  const [selectedSubCat, setSelectedSubCat] = useState<string>('ALL');
+  const [title, setTitle] = useState('');
+  const [parentCategory, setParentCategory] = useState('SDK & API');
+  const [subCategory, setSubCategory] = useState('Authentication');
+  const [tagsInput, setTagsInput] = useState('auth, token, sdk');
+  const [body, setBody] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const persistArticles = async (next: KBArticle[]): Promise<boolean> => {
+    const prev = articles;
     setArticles(next);
+    setErrorMsg('');
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch {}
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
+      if (onChange) {
+        await onChange(next);
+      }
+      return true;
+    } catch {
+      setArticles(prev);
+      setErrorMsg('Storage write failed (quota or unavailable). Form content preserved.');
+      return false;
+    }
   };
 
-  const voteFeedback = (id: string, isHelpful: boolean) => {
-    persist(
-      articles.map(a =>
-        a.id === id
-          ? {
-              ...a,
-              helpfulYes: isHelpful ? a.helpfulYes + 1 : a.helpfulYes,
-              helpfulNo: !isHelpful ? a.helpfulNo + 1 : a.helpfulNo,
-            }
-          : a
-      )
-    );
-  };
+  const parentCategories = useMemo(
+    () => Array.from(new Set(articles.map(a => a.parentCategory))),
+    [articles]
+  );
 
-  const handleCreateArticle = (e: React.FormEvent<HTMLFormElement>) => {
+  const subCategories = useMemo(() => {
+    const base = selectedParentCat === 'ALL' ? articles : articles.filter(a => a.parentCategory === selectedParentCat);
+    return Array.from(new Set(base.map(a => a.subCategory)));
+  }, [articles, selectedParentCat]);
+
+  const rankedArticles = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const queryTokens = q ? q.split(/\s+/) : [];
+    const expandedTokens = new Set<string>(queryTokens);
+    for (const tok of queryTokens) {
+      for (const [root, syns] of Object.entries(SYNONYM_MAP)) {
+        if (tok.includes(root) || syns.some(s => tok.includes(s))) {
+          expandedTokens.add(root);
+          syns.forEach(s => expandedTokens.add(s));
+        }
+      }
+    }
+
+    return articles
+      .filter(a => {
+        if (selectedParentCat !== 'ALL' && a.parentCategory !== selectedParentCat) return false;
+        if (selectedSubCat !== 'ALL' && a.subCategory !== selectedSubCat) return false;
+        return true;
+      })
+      .map(a => {
+        if (expandedTokens.size === 0) return { article: a, score: 1 };
+        const haystack = `${a.id} ${a.title} ${a.parentCategory} ${a.subCategory} ${(a.tags || []).join(' ')} ${a.body}`.toLowerCase();
+        let score = 0;
+        if (a.id.toLowerCase().includes(q)) score += 10;
+        if (a.title.toLowerCase().includes(q)) score += 8;
+        if (a.parentCategory.toLowerCase().includes(q) || a.subCategory.toLowerCase().includes(q)) score += 6;
+        for (const tok of expandedTokens) {
+          if (haystack.includes(tok)) score += 3;
+        }
+        return { article: a, score };
+      })
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(item => item.article);
+  }, [articles, searchQuery, selectedParentCat, selectedSubCat]);
+
+  const handleCreateArticle = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTitle.trim() || !newBody.trim()) return;
+    if (!title.trim() || !parentCategory.trim() || !subCategory.trim() || !body.trim()) {
+      setErrorMsg('Title, parent category, sub-category, and article body are required.');
+      return;
+    }
     const created: KBArticle = {
-      id: `kb-${Date.now().toString().slice(-4)}`,
-      title: newTitle.trim(),
-      category: newCategory,
-      body: newBody.trim(),
-      helpfulYes: 1,
-      helpfulNo: 0,
+      id: `KB-${103 + articles.length}`,
+      title: title.trim(),
+      parentCategory: parentCategory.trim(),
+      subCategory: subCategory.trim(),
+      tags: tagsInput.split(',').map(t => t.trim()).filter(Boolean),
+      body: body.trim(),
+      helpfulYes: 0,
+      helpfulNo: 0
     };
-    persist([created, ...articles]);
-    setNewTitle('');
-    setNewBody('');
+    const ok = await persistArticles([created, ...articles]);
+    if (ok) {
+      setTitle('');
+      setBody('');
+      setNotice(`Published article ${created.id} under ${created.parentCategory} > ${created.subCategory}.`);
+    }
   };
 
-  const results = useMemo(() => {
-    return articles.filter(a => {
-      const matchesCat = categoryFilter === 'ALL' || a.category === categoryFilter;
-      const q = search.trim().toLowerCase();
-      const matchesSearch = !q || a.title.toLowerCase().includes(q) || a.body.toLowerCase().includes(q);
-      return matchesCat && matchesSearch;
-    });
-  }, [articles, search, categoryFilter]);
+  const voteHelpful = (id: string, isYes: boolean) => {
+    const next = articles.map(a =>
+      a.id === id
+        ? { ...a, helpfulYes: a.helpfulYes + (isYes ? 1 : 0), helpfulNo: a.helpfulNo + (isYes ? 0 : 1) }
+        : a
+    );
+    void persistArticles(next);
+  };
 
   return (
-    <section aria-label="Knowledge Base Builder" className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans">
-      <div className="max-w-5xl mx-auto space-y-6">
-        <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-[#262626] pb-4">
-          <h1 className="text-2xl font-bold text-[#D4AF37]">Knowledge Base Builder</h1>
-          <div className="flex gap-2">
-            <label htmlFor="kb-search" className="sr-only">Search Knowledge Base</label>
-            <input
-              id="kb-search"
-              type="search"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search articles..."
-              className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]"
-            />
-            <label htmlFor="kb-cat-filter" className="sr-only">Category Filter</label>
-            <select
-              id="kb-cat-filter"
-              value={categoryFilter}
-              onChange={e => setCategoryFilter(e.target.value)}
-              className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]"
-            >
-              <option value="ALL">All Categories</option>
-              <option value="Getting Started">Getting Started</option>
-              <option value="Affiliate & Billing">Affiliate & Billing</option>
-              <option value="API & Security">API & Security</option>
-            </select>
-          </div>
+    <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
+      <div className="max-w-6xl mx-auto space-y-6">
+        <header className="border-b border-zinc-800 pb-4">
+          <h1 className="text-2xl font-bold text-[#D4AF37]">Hierarchical Knowledge Base & Semantic Search</h1>
+          <p className="text-sm text-zinc-400">Matches article IDs, parent/child category trees, tags, synonyms, and full text</p>
         </header>
 
-        <div className="space-y-3">
-          {results.map(a => (
-            <article key={a.id} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-2">
-              <span className="text-xs text-[#D4AF37] font-semibold">{a.category}</span>
-              <h2 className="text-lg font-bold">{a.title}</h2>
-              <p className="text-sm text-[#A3A3A3]">{a.body}</p>
-              <div className="pt-2 flex items-center gap-3 text-xs">
-                <span className="text-[#A3A3A3]">Was this article helpful?</span>
-                <button
-                  type="button"
-                  onClick={() => voteFeedback(a.id, true)}
-                  className="px-2.5 py-1 rounded bg-[#1F1F1F] text-[#22C55E]"
-                >
-                  👍 Yes ({a.helpfulYes})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => voteFeedback(a.id, false)}
-                  className="px-2.5 py-1 rounded bg-[#1F1F1F] text-[#EF4444]"
-                >
-                  👎 No ({a.helpfulNo})
-                </button>
-              </div>
-            </article>
-          ))}
+        {notice && <div role="status" className="bg-emerald-950/60 border border-emerald-700 text-emerald-200 px-4 py-2 rounded text-sm">{notice}</div>}
+        {errorMsg && <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{errorMsg}</div>}
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Search by ID (KB-101), category, synonym, or topic..."
+            className="bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
+          />
+          <select
+            aria-label="Parent Category Filter"
+            value={selectedParentCat}
+            onChange={e => {
+              setSelectedParentCat(e.target.value);
+              setSelectedSubCat('ALL');
+            }}
+            className="bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
+          >
+            <option value="ALL">All Parent Categories</option>
+            {parentCategories.map(c => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <select
+            aria-label="Sub-Category Filter"
+            value={selectedSubCat}
+            onChange={e => setSelectedSubCat(e.target.value)}
+            className="bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
+          >
+            <option value="ALL">All Sub-Categories</option>
+            {subCategories.map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
         </div>
 
-        <form onSubmit={handleCreateArticle} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-3">
-          <h2 className="text-base font-bold text-[#D4AF37]">Publish New Knowledge Base Article</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label htmlFor="kb-new-title" className="block text-xs text-[#A3A3A3] mb-1">Article Title</label>
-              <input id="kb-new-title" type="text" required value={newTitle} onChange={e => setNewTitle(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-2 text-sm" />
-            </div>
-            <div>
-              <label htmlFor="kb-new-cat" className="block text-xs text-[#A3A3A3] mb-1">Category</label>
-              <select id="kb-new-cat" value={newCategory} onChange={e => setNewCategory(e.target.value as KBArticle['category'])} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-2 text-sm">
-                <option value="Getting Started">Getting Started</option>
-                <option value="Affiliate & Billing">Affiliate & Billing</option>
-                <option value="API & Security">API & Security</option>
-              </select>
-            </div>
+        <form onSubmit={handleCreateArticle} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Article Title" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+            <input value={parentCategory} onChange={e => setParentCategory(e.target.value)} placeholder="Parent Category" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+            <input value={subCategory} onChange={e => setSubCategory(e.target.value)} placeholder="Child Sub-Category" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+            <input value={tagsInput} onChange={e => setTagsInput(e.target.value)} placeholder="Comma-separated tags" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
           </div>
-          <div>
-            <label htmlFor="kb-new-body" className="block text-xs text-[#A3A3A3] mb-1">Article Content</label>
-            <textarea id="kb-new-body" rows={3} required value={newBody} onChange={e => setNewBody(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-2 text-sm" />
-          </div>
-          <button type="submit" className="px-4 py-2 rounded bg-[#D4AF37] text-[#0A0A0A] font-bold text-xs">
-            + Publish Article
-          </button>
+          <textarea rows={3} value={body} onChange={e => setBody(e.target.value)} placeholder="Article markdown/body..." className="w-full bg-zinc-950 border border-zinc-800 rounded p-3 text-sm text-white" />
+          <button type="submit" className="bg-[#D4AF37] text-black font-bold text-xs px-4 py-2 rounded">+ Publish KB Article</button>
         </form>
+
+        <div className="space-y-3">
+          {rankedArticles.map(a => (
+            <div key={a.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-2">
+              <div className="flex justify-between items-center text-xs text-[#D4AF37]">
+                <span className="font-mono font-bold">{a.id} · {a.parentCategory} &gt; {a.subCategory}</span>
+                <span>{(a.tags || []).map(t => `#${t}`).join(' ')}</span>
+              </div>
+              <h3 className="text-lg font-bold text-white">{a.title}</h3>
+              <p className="text-sm text-zinc-300">{a.body}</p>
+              <div className="flex items-center gap-3 pt-2 text-xs text-zinc-400">
+                <button type="button" onClick={() => voteHelpful(a.id, true)} className="px-2.5 py-1 rounded bg-zinc-800 text-emerald-300">
+                  👍 Helpful ({a.helpfulYes})
+                </button>
+                <button type="button" onClick={() => voteHelpful(a.id, false)} className="px-2.5 py-1 rounded bg-zinc-800 text-red-300">
+                  👎 Not Helpful ({a.helpfulNo})
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
-    </section>
+    </div>
   );
-}
+};
 
 export default KnowledgeBaseBuilder;
