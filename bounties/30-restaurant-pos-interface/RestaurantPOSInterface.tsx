@@ -77,11 +77,14 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
   const [itemName, setItemName] = useState('');
   const [itemPrice, setItemPrice] = useState('');
   const [itemCategory, setItemCategory] = useState<MenuItem['category']>('Mains');
+  const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const saveSeqRef = useRef(0);
+  const saveLockRef = useRef(false);
 
   const persistPosState = async (nextMenu: MenuItem[], nextOrders: SettledOrder[]): Promise<boolean> => {
-    const seq = ++saveSeqRef.current;
+    if (saveLockRef.current) return false;
+    saveLockRef.current = true;
+    setIsSaving(true);
     const prevMenu = menu;
     const prevOrders = settledOrders;
     setMenu(nextMenu);
@@ -91,18 +94,18 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
       if (onChange) {
         await onChange({ menu: nextMenu, orders: nextOrders });
       }
-      if (seq !== saveSeqRef.current) return true;
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(storageKey, JSON.stringify({ menu: nextMenu, orders: nextOrders }));
       }
       return true;
     } catch {
-      if (seq === saveSeqRef.current) {
-        setMenu(prevMenu);
-        setSettledOrders(prevOrders);
-        setErrorMsg('Failed to save POS state; rolled back.');
-      }
+      setMenu(prevMenu);
+      setSettledOrders(prevOrders);
+      setErrorMsg('Failed to save POS state; rolled back.');
       return false;
+    } finally {
+      saveLockRef.current = false;
+      setIsSaving(false);
     }
   };
 
@@ -120,7 +123,7 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
   }, [cart]);
 
   const addToTicket = (item: MenuItem) => {
-    if (!item.available) return;
+    if (!item.available || isSaving) return;
     setCart(curr => {
       const existing = curr.find(l => l.itemId === item.id);
       if (existing) {
@@ -131,6 +134,7 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
   };
 
   const adjustQty = (itemId: string, delta: number) => {
+    if (isSaving) return;
     setCart(curr =>
       curr
         .map(l => (l.itemId === itemId ? { ...l, quantity: l.quantity + delta } : l))
@@ -140,6 +144,7 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
 
   const handleSaveMenuItem = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saveLockRef.current) return;
     const parsedPrice = roundCents(Number(itemPrice));
     if (!itemName.trim() || Number.isNaN(parsedPrice) || parsedPrice <= 0) {
       setErrorMsg('Valid menu item name and positive price are required.');
@@ -176,7 +181,7 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
   };
 
   const settleTicket = async () => {
-    if (cart.length === 0) return;
+    if (cart.length === 0 || saveLockRef.current) return;
     const order: SettledOrder = {
       id: `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
       tableNumber,
@@ -184,7 +189,7 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
       subtotal: ticketTotals.subtotal,
       tax: ticketTotals.tax,
       total: ticketTotals.total,
-      settledAtIso: new Date().toISOString().slice(11, 19) + ' UTC'
+      settledAtIso: new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC'
     };
     const ok = await persistPosState(menu, [order, ...settledOrders]);
     if (ok) {
@@ -221,14 +226,14 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-4">
             <form onSubmit={handleSaveMenuItem} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap gap-2">
-              <input type="text" placeholder="Menu Item Name" value={itemName} onChange={e => setItemName(e.target.value)} className="flex-1 min-w-[160px] bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
-              <input type="number" step="0.01" placeholder="Price ($)" value={itemPrice} onChange={e => setItemPrice(e.target.value)} className="w-28 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
-              <select value={itemCategory} onChange={e => setItemCategory(e.target.value as MenuItem['category'])} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white">
+              <input aria-label="Menu Item Name" type="text" placeholder="Menu Item Name" value={itemName} onChange={e => setItemName(e.target.value)} className="flex-1 min-w-[160px] bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+              <input aria-label="Menu Item Price" type="number" step="0.01" placeholder="Price ($)" value={itemPrice} onChange={e => setItemPrice(e.target.value)} className="w-28 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white" />
+              <select aria-label="Menu Item Category" value={itemCategory} onChange={e => setItemCategory(e.target.value as MenuItem['category'])} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white">
                 {(['Starters', 'Mains', 'Drinks', 'Desserts'] as const).map(c => (
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
-              <button type="submit" className="bg-[#D4AF37] text-black font-bold text-xs px-4 py-1.5 rounded">
+              <button type="submit" disabled={isSaving} className="bg-[#D4AF37] text-black font-bold text-xs px-4 py-1.5 rounded disabled:opacity-50">
                 {editingId ? 'Save Item Edit' : '+ Add Menu Item'}
               </button>
             </form>
@@ -259,9 +264,9 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
                     <div className="text-sm font-mono text-zinc-300">${item.price.toFixed(2)}</div>
                   </div>
                   <div className="flex gap-1.5">
-                    <button type="button" onClick={() => addToTicket(item)} className="px-3 py-1.5 rounded bg-[#D4AF37] text-black font-bold text-xs">+ Order</button>
-                    <button type="button" onClick={() => startEditItem(item)} className="px-2.5 py-1.5 rounded bg-zinc-800 text-zinc-200 text-xs">Edit</button>
-                    <button type="button" onClick={() => deleteMenuItem(item.id)} className="px-2.5 py-1.5 rounded bg-red-950 text-red-300 text-xs">✕</button>
+                    <button type="button" disabled={isSaving} onClick={() => addToTicket(item)} className="px-3 py-1.5 rounded bg-[#D4AF37] text-black font-bold text-xs">+ Order</button>
+                    <button type="button" disabled={isSaving} onClick={() => startEditItem(item)} className="px-2.5 py-1.5 rounded bg-zinc-800 text-zinc-200 text-xs">Edit</button>
+                    <button type="button" disabled={isSaving} onClick={() => deleteMenuItem(item.id)} className="px-2.5 py-1.5 rounded bg-red-950 text-red-300 text-xs">✕</button>
                   </div>
                 </div>
               ))}
@@ -282,9 +287,9 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
                         <div className="text-xs text-zinc-400">${line.unitPrice.toFixed(2)} each</div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <button type="button" onClick={() => adjustQty(line.itemId, -1)} className="px-2 py-0.5 bg-zinc-800 rounded">-</button>
+                        <button type="button" disabled={isSaving} onClick={() => adjustQty(line.itemId, -1)} className="px-2 py-0.5 bg-zinc-800 rounded">-</button>
                         <span className="font-mono font-bold">{line.quantity}</span>
-                        <button type="button" onClick={() => adjustQty(line.itemId, 1)} className="px-2 py-0.5 bg-zinc-800 rounded">+</button>
+                        <button type="button" disabled={isSaving} onClick={() => adjustQty(line.itemId, 1)} className="px-2 py-0.5 bg-zinc-800 rounded">+</button>
                         <span className="font-mono text-[#D4AF37] w-16 text-right">${roundCents(line.unitPrice * line.quantity).toFixed(2)}</span>
                       </div>
                     </div>
@@ -309,11 +314,11 @@ export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
 
               <button
                 type="button"
-                disabled={cart.length === 0}
+                disabled={cart.length === 0 || isSaving}
                 onClick={() => void settleTicket()}
                 className="w-full py-2.5 rounded-lg bg-[#D4AF37] text-black font-bold text-sm disabled:opacity-40"
               >
-                Dispatch to Kitchen & Settle (${ticketTotals.total.toFixed(2)})
+                {isSaving ? 'Settling Ticket...' : `Dispatch to Kitchen & Settle ($${ticketTotals.total.toFixed(2)})`}
               </button>
             </div>
 
