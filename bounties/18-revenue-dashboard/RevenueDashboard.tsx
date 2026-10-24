@@ -1,120 +1,204 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
-export interface CohortMetric {
+export interface MonthlyRevenueSnapshot {
   month: string;
+  startingMrr: number;
   newMrr: number;
   expansionMrr: number;
   churnedMrr: number;
   activeCustomers: number;
-  arpu: number;
 }
 
-const COHORTS: CohortMetric[] = [
-  { month: '2026-05', newMrr: 14200, expansionMrr: 3100, churnedMrr: 950, activeCustomers: 118, arpu: 138 },
-  { month: '2026-06', newMrr: 18400, expansionMrr: 4250, churnedMrr: 1100, activeCustomers: 152, arpu: 142 },
-  { month: '2026-07', newMrr: 22900, expansionMrr: 5800, churnedMrr: 1250, activeCustomers: 194, arpu: 148 },
-  { month: '2026-08', newMrr: 27500, expansionMrr: 6900, churnedMrr: 1400, activeCustomers: 241, arpu: 155 },
-  { month: '2026-09', newMrr: 34200, expansionMrr: 8400, churnedMrr: 1320, activeCustomers: 298, arpu: 162 },
-  { month: '2026-10', newMrr: 41800, expansionMrr: 10200, churnedMrr: 1480, activeCustomers: 365, arpu: 168 },
+export interface RevenueDashboardProps {
+  initialSnapshots?: MonthlyRevenueSnapshot[];
+  storageKey?: string;
+}
+
+const DEFAULT_SNAPSHOTS: MonthlyRevenueSnapshot[] = [
+  { month: '2026-06', startingMrr: 28000, newMrr: 14200, expansionMrr: 3100, churnedMrr: 1200, activeCustomers: 185 },
+  { month: '2026-07', startingMrr: 44100, newMrr: 18900, expansionMrr: 4400, churnedMrr: 1450, activeCustomers: 230 },
+  { month: '2026-08', startingMrr: 65950, newMrr: 24500, expansionMrr: 6200, churnedMrr: 1800, activeCustomers: 294 },
+  { month: '2026-09', startingMrr: 94850, newMrr: 31200, expansionMrr: 8500, churnedMrr: 2100, activeCustomers: 368 },
+  { month: '2026-10', startingMrr: 132450, newMrr: 39800, expansionMrr: 11400, churnedMrr: 2350, activeCustomers: 452 },
 ];
 
-export function RevenueDashboard() {
-  const [selectedRange, setSelectedRange] = useState<number>(6);
+export function RevenueDashboard({
+  initialSnapshots = DEFAULT_SNAPSHOTS,
+  storageKey = 'agentmidas_revenue_snapshots_v1',
+}: RevenueDashboardProps = {}) {
+  const [snapshots, setSnapshots] = useState<MonthlyRevenueSnapshot[]>(initialSnapshots);
+  const [selectedMonth, setSelectedMonth] = useState<string>(
+    initialSnapshots[initialSnapshots.length - 1]?.month ?? '2026-10'
+  );
+  const [newMonth, setNewMonth] = useState<string>('2026-11');
+  const [newAddedMrr, setNewAddedMrr] = useState<string>('42000');
+  const [newExpansion, setNewExpansion] = useState<string>('12500');
+  const [newChurned, setNewChurned] = useState<string>('2500');
+  const [newCustomers, setNewCustomers] = useState<string>('510');
 
-  const visibleCohorts = useMemo(() => COHORTS.slice(-selectedRange), [selectedRange]);
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved) as MonthlyRevenueSnapshot[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setSnapshots(parsed);
+          setSelectedMonth(parsed[parsed.length - 1].month);
+        }
+      }
+    } catch {}
+  }, [storageKey]);
 
-  const summary = useMemo(() => {
-    const latest = visibleCohorts[visibleCohorts.length - 1] || COHORTS[COHORTS.length - 1];
-    const netMrr = latest.newMrr + latest.expansionMrr - latest.churnedMrr;
-    const arr = netMrr * 12;
-    const grossRevenue = latest.newMrr + latest.expansionMrr;
-    const churnRatePct = grossRevenue > 0 ? (latest.churnedMrr / grossRevenue) * 100 : 0;
-    const monthlyChurnDecimal = Math.max(0.005, churnRatePct / 100);
-    const ltv = latest.arpu / monthlyChurnDecimal;
+  const current = useMemo(
+    () => snapshots.find(s => s.month === selectedMonth) ?? snapshots[snapshots.length - 1],
+    [snapshots, selectedMonth]
+  );
+
+  const kpis = useMemo(() => {
+    const netNewMrr = current.newMrr + current.expansionMrr - current.churnedMrr;
+    const endingMrr = current.startingMrr + netNewMrr;
+    const arr = endingMrr * 12;
+    const grossChurnRateDecimal = current.startingMrr > 0 ? current.churnedMrr / current.startingMrr : 0;
+    const grossChurnRatePct = grossChurnRateDecimal * 100;
+    const arpu = current.activeCustomers > 0 ? endingMrr / current.activeCustomers : 0;
+    const ltv = grossChurnRateDecimal > 0 ? arpu / grossChurnRateDecimal : arpu * 24;
+
     return {
-      netMrr,
+      startingMrr: current.startingMrr,
+      netNewMrr,
+      endingMrr,
       arr,
-      churnRatePct: churnRatePct.toFixed(2),
-      ltv: Math.round(ltv),
-      customers: latest.activeCustomers,
+      grossChurnRatePct: grossChurnRatePct.toFixed(2),
+      arpu: arpu.toFixed(2),
+      ltv: ltv.toFixed(0),
     };
-  }, [visibleCohorts]);
+  }, [current]);
+
+  const handleAddSnapshot = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!newMonth.trim()) return;
+    const last = snapshots[snapshots.length - 1];
+    const lastEndingMrr = last ? last.startingMrr + last.newMrr + last.expansionMrr - last.churnedMrr : 100000;
+    const created: MonthlyRevenueSnapshot = {
+      month: newMonth.trim(),
+      startingMrr: lastEndingMrr,
+      newMrr: Math.max(0, Number(newAddedMrr) || 0),
+      expansionMrr: Math.max(0, Number(newExpansion) || 0),
+      churnedMrr: Math.max(0, Number(newChurned) || 0),
+      activeCustomers: Math.max(1, Number(newCustomers) || 1),
+    };
+    const next = [...snapshots.filter(s => s.month !== created.month), created];
+    setSnapshots(next);
+    setSelectedMonth(created.month);
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(next));
+    } catch {}
+  };
 
   return (
-    <section className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] py-12 px-6 font-sans">
-      <div className="max-w-6xl mx-auto space-y-8">
-        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-[#2A2A2A] pb-6">
+    <section aria-label="Revenue Dashboard" className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans">
+      <div className="max-w-6xl mx-auto space-y-6">
+        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-[#262626] pb-4">
           <div>
-            <span className="text-xs uppercase tracking-widest text-[#D4AF37] font-mono">Agent Midas • Financial Intelligence</span>
-            <h1 className="text-3xl font-bold mt-1">Real-Time MRR, ARR, Churn & LTV Dashboard</h1>
-            <p className="text-sm text-[#9CA3AF] mt-1">Executive SaaS revenue telemetry with expansion & contraction waterfall analysis.</p>
+            <h1 className="text-2xl md:text-3xl font-bold text-[#D4AF37]">Executive Revenue Dashboard</h1>
+            <p className="text-sm text-[#A3A3A3]">Cumulative Ending MRR, Annualized Run-Rate (ARR), Starting-MRR Churn & Cohort LTV</p>
           </div>
-          <div className="flex gap-2">
-            {[3, 6].map(months => (
-              <button
-                key={months}
-                type="button"
-                onClick={() => setSelectedRange(months)}
-                className={`px-4 py-2 rounded-lg text-xs font-mono border ${selectedRange === months ? 'bg-[#D4AF37] text-[#0A0A0A] border-[#D4AF37]' : 'bg-[#141414] text-[#9CA3AF] border-[#2A2A2A]'}`}
-              >
-                Last {months}M
-              </button>
-            ))}
+          <div>
+            <label htmlFor="rev-period-select" className="text-xs text-[#A3A3A3] mr-2">Reporting Period:</label>
+            <select
+              id="rev-period-select"
+              value={selectedMonth}
+              onChange={e => setSelectedMonth(e.target.value)}
+              className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+            >
+              {snapshots.map(s => (
+                <option key={s.month} value={s.month}>{s.month}</option>
+              ))}
+            </select>
           </div>
         </header>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-[#0D0D0D] border border-[#2A2A2A] rounded-xl p-5">
-            <p className="text-xs text-[#9CA3AF] uppercase">Net MRR</p>
-            <p className="text-2xl font-bold text-[#D4AF37] mt-2 font-mono">${summary.netMrr.toLocaleString()}</p>
+          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
+            <p className="text-xs uppercase text-[#A3A3A3]">Ending MRR ({current.month})</p>
+            <p className="text-2xl font-bold text-[#D4AF37] mt-1">${kpis.endingMrr.toLocaleString()}</p>
+            <p className="text-xs text-[#22C55E] mt-1">Net New MRR: +${kpis.netNewMrr.toLocaleString()}</p>
           </div>
-          <div className="bg-[#0D0D0D] border border-[#2A2A2A] rounded-xl p-5">
-            <p className="text-xs text-[#9CA3AF] uppercase">Annualized Run Rate (ARR)</p>
-            <p className="text-2xl font-bold text-[#E8C547] mt-2 font-mono">${summary.arr.toLocaleString()}</p>
+          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
+            <p className="text-xs uppercase text-[#A3A3A3]">Annual Recurring Revenue (ARR)</p>
+            <p className="text-2xl font-bold text-[#22C55E] mt-1">${kpis.arr.toLocaleString()}</p>
+            <p className="text-xs text-[#A3A3A3] mt-1">Ending MRR × 12</p>
           </div>
-          <div className="bg-[#0D0D0D] border border-[#2A2A2A] rounded-xl p-5">
-            <p className="text-xs text-[#9CA3AF] uppercase">Revenue Churn Rate</p>
-            <p className="text-2xl font-bold text-[#F5F5F5] mt-2 font-mono">{summary.churnRatePct}%</p>
+          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
+            <p className="text-xs uppercase text-[#A3A3A3]">Gross MRR Churn Rate</p>
+            <p className="text-2xl font-bold text-[#F59E0B] mt-1">{kpis.grossChurnRatePct}%</p>
+            <p className="text-xs text-[#A3A3A3] mt-1">${current.churnedMrr.toLocaleString()} / ${kpis.startingMrr.toLocaleString()} Starting MRR</p>
           </div>
-          <div className="bg-[#0D0D0D] border border-[#2A2A2A] rounded-xl p-5">
-            <p className="text-xs text-[#9CA3AF] uppercase">Customer Lifetime Value (LTV)</p>
-            <p className="text-2xl font-bold text-[#D4AF37] mt-2 font-mono">${summary.ltv.toLocaleString()}</p>
+          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
+            <p className="text-xs uppercase text-[#A3A3A3]">Customer LTV (ARPU ${kpis.arpu})</p>
+            <p className="text-2xl font-bold text-[#3B82F6] mt-1">${Number(kpis.ltv).toLocaleString()}</p>
           </div>
         </div>
 
-        <div className="bg-[#0D0D0D] border border-[#2A2A2A] rounded-xl p-6">
-          <h2 className="text-lg font-semibold mb-4">Monthly Cohort Revenue Breakdown</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-[#2A2A2A] text-[#9CA3AF]">
-                  <th className="py-3 px-4">Period</th>
-                  <th className="py-3 px-4">New MRR</th>
-                  <th className="py-3 px-4">Expansion MRR</th>
-                  <th className="py-3 px-4">Churned MRR</th>
-                  <th className="py-3 px-4">Net MRR</th>
-                  <th className="py-3 px-4">Active Customers</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleCohorts.map(c => {
-                  const net = c.newMrr + c.expansionMrr - c.churnedMrr;
-                  return (
-                    <tr key={c.month} className="border-b border-[#2A2A2A] hover:bg-[#141414]">
-                      <td className="py-3 px-4 font-mono">{c.month}</td>
-                      <td className="py-3 px-4 font-mono text-[#F5F5F5]">+${c.newMrr.toLocaleString()}</td>
-                      <td className="py-3 px-4 font-mono text-[#E8C547]">+${c.expansionMrr.toLocaleString()}</td>
-                      <td className="py-3 px-4 font-mono text-[#9CA3AF]">-${c.churnedMrr.toLocaleString()}</td>
-                      <td className="py-3 px-4 font-mono font-bold text-[#D4AF37]">${net.toLocaleString()}</td>
-                      <td className="py-3 px-4 font-mono">{c.activeCustomers}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        <form onSubmit={handleAddSnapshot} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4 grid grid-cols-1 sm:grid-cols-6 gap-3 items-end">
+          <div>
+            <label htmlFor="rev-month" className="block text-xs text-[#A3A3A3] mb-1">Month (YYYY-MM)</label>
+            <input id="rev-month" type="text" required value={newMonth} onChange={e => setNewMonth(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]" />
           </div>
+          <div>
+            <label htmlFor="rev-new-mrr" className="block text-xs text-[#A3A3A3] mb-1">New MRR ($)</label>
+            <input id="rev-new-mrr" type="number" value={newAddedMrr} onChange={e => setNewAddedMrr(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]" />
+          </div>
+          <div>
+            <label htmlFor="rev-expansion" className="block text-xs text-[#A3A3A3] mb-1">Expansion ($)</label>
+            <input id="rev-expansion" type="number" value={newExpansion} onChange={e => setNewExpansion(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]" />
+          </div>
+          <div>
+            <label htmlFor="rev-churn" className="block text-xs text-[#A3A3A3] mb-1">Churned MRR ($)</label>
+            <input id="rev-churn" type="number" value={newChurned} onChange={e => setNewChurned(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]" />
+          </div>
+          <div>
+            <label htmlFor="rev-cust" className="block text-xs text-[#A3A3A3] mb-1">Customers</label>
+            <input id="rev-cust" type="number" value={newCustomers} onChange={e => setNewCustomers(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]" />
+          </div>
+          <button type="submit" className="py-2 px-4 rounded-lg bg-[#D4AF37] text-[#0A0A0A] font-bold text-sm hover:bg-[#E8C547]">
+            + Record Period
+          </button>
+        </form>
+
+        <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 overflow-x-auto">
+          <h2 className="text-lg font-semibold text-[#D4AF37] mb-3">Cohort Revenue Ledger</h2>
+          <table className="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr className="border-b border-[#262626] text-[#A3A3A3]">
+                <th className="py-2 pr-4">Month</th>
+                <th className="py-2 pr-4">Starting MRR</th>
+                <th className="py-2 pr-4">New MRR</th>
+                <th className="py-2 pr-4">Expansion</th>
+                <th className="py-2 pr-4">Churned</th>
+                <th className="py-2 pr-4">Ending MRR</th>
+                <th className="py-2">ARR</th>
+              </tr>
+            </thead>
+            <tbody>
+              {snapshots.map(s => {
+                const ending = s.startingMrr + s.newMrr + s.expansionMrr - s.churnedMrr;
+                return (
+                  <tr key={s.month} className="border-b border-[#1A1A1A]">
+                    <td className="py-3 pr-4 font-mono">{s.month}</td>
+                    <td className="py-3 pr-4 font-mono">${s.startingMrr.toLocaleString()}</td>
+                    <td className="py-3 pr-4 font-mono text-[#22C55E]">+${s.newMrr.toLocaleString()}</td>
+                    <td className="py-3 pr-4 font-mono text-[#3B82F6]">+${s.expansionMrr.toLocaleString()}</td>
+                    <td className="py-3 pr-4 font-mono text-[#EF4444]">-${s.churnedMrr.toLocaleString()}</td>
+                    <td className="py-3 pr-4 font-mono font-bold text-[#D4AF37]">${ending.toLocaleString()}</td>
+                    <td className="py-3 font-mono">${(ending * 12).toLocaleString()}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
     </section>
