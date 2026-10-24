@@ -235,6 +235,7 @@ export const VideoTutorialSeries: React.FC<VideoTutorialSeriesProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
   const [selectedQuizOption, setSelectedQuizOption] = useState<number | null>(null);
+  const [captionsEnabled, setCaptionsEnabled] = useState<boolean>(true);
   const [notice, setNotice] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string>('');
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -267,11 +268,23 @@ export const VideoTutorialSeries: React.FC<VideoTutorialSeriesProps> = ({
     [modules, selectedId]
   );
 
+  // Sync saved watch progress and playback rate when switching modules or mounting
   useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.playbackRate = playbackSpeed;
-    }
-  }, [playbackSpeed, activeModule]);
+    const el = videoRef.current;
+    if (!el || !activeModule) return;
+    el.playbackRate = playbackSpeed;
+    try {
+      if (Math.abs(el.currentTime - activeModule.watchedSec) > 1) {
+        el.currentTime = activeModule.watchedSec;
+      }
+    } catch {}
+  }, [activeModule?.id, playbackSpeed]);
+
+  const vttDataUri = useMemo(() => {
+    if (!activeModule) return '';
+    const vtt = `WEBVTT\n\n00:00:00.000 --> 00:15:00.000\n${activeModule.transcript}\n`;
+    return `data:text/vtt;utf8,${encodeURIComponent(vtt)}`;
+  }, [activeModule]);
 
   const filteredModules = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -373,6 +386,7 @@ export const VideoTutorialSeries: React.FC<VideoTutorialSeriesProps> = ({
 
             <input
               type="search"
+              aria-label="Search tutorials and transcripts"
               placeholder="Search titles, transcripts, or CLI/SDK code..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
@@ -416,13 +430,20 @@ export const VideoTutorialSeries: React.FC<VideoTutorialSeriesProps> = ({
                   </button>
                 </div>
 
-                {/* Real HTML5 Video Element with Chapter Scrubber */}
                 <div className="bg-black border border-zinc-800 rounded-lg p-4 space-y-3">
                   <video
                     ref={videoRef}
                     src={activeModule.videoUrl}
                     controls
                     preload="metadata"
+                    onLoadedMetadata={e => {
+                      e.currentTarget.playbackRate = playbackSpeed;
+                      if (activeModule.watchedSec > 0) {
+                        try {
+                          e.currentTarget.currentTime = activeModule.watchedSec;
+                        } catch {}
+                      }
+                    }}
                     onTimeUpdate={e => {
                       const sec = Math.floor(e.currentTarget.currentTime);
                       if (sec > activeModule.watchedSec) {
@@ -432,15 +453,34 @@ export const VideoTutorialSeries: React.FC<VideoTutorialSeriesProps> = ({
                     onEnded={() => jumpToTimestamp(activeModule.durationSec)}
                     className="w-full rounded bg-zinc-950 max-h-72"
                   >
-                    <track kind="captions" label="English" />
+                    <track
+                      kind="captions"
+                      src={vttDataUri}
+                      srcLang="en"
+                      label="English"
+                      default={captionsEnabled}
+                    />
                   </video>
+
+                  {captionsEnabled && (
+                    <div aria-live="polite" className="bg-zinc-950/90 border border-zinc-800 px-3 py-1.5 rounded text-xs text-zinc-200 text-center">
+                      CC: {activeModule.transcript}
+                    </div>
+                  )}
 
                   <div className="flex justify-between items-center text-xs text-zinc-400">
                     <span>
                       Watched: {Math.floor(activeModule.watchedSec / 60)}m {activeModule.watchedSec % 60}s /{' '}
                       {Math.floor(activeModule.durationSec / 60)}m {activeModule.durationSec % 60}s
                     </span>
-                    <div className="flex gap-1.5">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCaptionsEnabled(c => !c)}
+                        className={`px-2 py-0.5 rounded ${captionsEnabled ? 'bg-[#D4AF37] text-black font-bold' : 'bg-zinc-800 text-zinc-300'}`}
+                      >
+                        CC {captionsEnabled ? 'ON' : 'OFF'}
+                      </button>
                       {[0.75, 1, 1.25, 1.5, 2].map(spd => (
                         <button
                           key={spd}
