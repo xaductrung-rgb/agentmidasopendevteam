@@ -1,6 +1,4 @@
-'use client';
-
-import React, { useEffect, useState } from 'react';
+import React, { useState, useMemo } from 'react';
 
 export interface PropertyListing {
   id: string;
@@ -12,175 +10,231 @@ export interface PropertyListing {
   sqft: number;
   lat: number;
   lng: number;
-  virtualTourScenes: string[];
+  virtualTourUrl: string;
 }
 
-const DEFAULT_PROPERTIES: PropertyListing[] = [
+export interface RealEstateListingPortalProps {
+  storageKey?: string;
+  initialListings?: PropertyListing[];
+  onChange?: (listings: PropertyListing[]) => void | Promise<void>;
+}
+
+const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
+  'las vegas': { lat: 36.1699, lng: -115.1398 },
+  'miami': { lat: 25.7617, lng: -80.1918 },
+  'austin': { lat: 30.2672, lng: -97.7431 },
+  'new york': { lat: 40.7128, lng: -74.0060 },
+  'los angeles': { lat: 34.0522, lng: -118.2437 }
+};
+
+const makeUniqueId = () =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `prop-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+const DEFAULT_LISTINGS: PropertyListing[] = [
   {
-    id: 'prop-1',
-    title: 'The Midas Penthouse at Sovereign Tower',
-    city: 'Miami, FL',
-    price: 3450000,
+    id: 'prop-101',
+    title: 'Obsidian Sky Penthouse',
+    city: 'Las Vegas',
+    price: 1850000,
     beds: 4,
     baths: 4.5,
-    sqft: 4200,
-    lat: 25.7617,
-    lng: -80.1918,
-    virtualTourScenes: ['Grand Foyer (360°)', 'Infinity Pool Terrace (360°)', 'Primary Suite & Spa (360°)'],
+    sqft: 4100,
+    lat: 36.1699,
+    lng: -115.1398,
+    virtualTourUrl: 'https://tours.agentmidas.dev/obsidian-penthouse'
   },
   {
-    id: 'prop-2',
-    title: 'Aurelia Modern Glass Villa',
-    city: 'Austin, TX',
-    price: 1890000,
+    id: 'prop-102',
+    title: 'Biscayne Waterfront Villa',
+    city: 'Miami',
+    price: 2450000,
     beds: 5,
-    baths: 4,
-    sqft: 3850,
-    lat: 30.2672,
-    lng: -97.7431,
-    virtualTourScenes: ['Chef Kitchen & Wine Vault (360°)', 'Lakefront Deck (360°)'],
-  },
+    baths: 5,
+    sqft: 5200,
+    lat: 25.7617,
+    lng: -80.1918,
+    virtualTourUrl: 'https://tours.agentmidas.dev/biscayne-villa'
+  }
 ];
 
-const STORAGE_KEY = 'agentmidas_real_estate_v2';
-
-export function RealEstateListingPortal() {
-  const [listings, setListings] = useState<PropertyListing[]>(DEFAULT_PROPERTIES);
-  const [selectedId, setSelectedId] = useState<string>(DEFAULT_PROPERTIES[0].id);
-  const [activeSceneIdx, setActiveSceneIdx] = useState<number>(0);
-  const [newTitle, setNewTitle] = useState<string>('');
-  const [newCity, setNewCity] = useState<string>('Las Vegas, NV');
-  const [newPrice, setNewPrice] = useState<string>('1250000');
-
-  useEffect(() => {
+export const RealEstateListingPortal: React.FC<RealEstateListingPortalProps> = ({
+  storageKey = 'agentmidas_real_estate_v2',
+  initialListings = DEFAULT_LISTINGS,
+  onChange
+}) => {
+  const [listings, setListings] = useState<PropertyListing[]>(() => {
     try {
-      const saved = window.localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as PropertyListing[];
-        if (Array.isArray(parsed) && parsed.length > 0) setListings(parsed);
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch {}
-  }, []);
+    return initialListings;
+  });
 
-  const selected = listings.find(l => l.id === selectedId) ?? listings[0];
+  const [selectedId, setSelectedId] = useState<string>(listings[0]?.id || 'prop-101');
+  const [title, setTitle] = useState('');
+  const [city, setCity] = useState('Austin');
+  const [price, setPrice] = useState('950000');
+  const [latInput, setLatInput] = useState('30.2672');
+  const [lngInput, setLngInput] = useState('-97.7431');
+  const [downPaymentPct, setDownPaymentPct] = useState(20);
+  const [interestRatePct, setInterestRatePct] = useState(6.5);
+  const [loanTermYears, setLoanTermYears] = useState(30);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const handleAddProperty = (e: React.FormEvent<HTMLFormElement>) => {
+  const persistListings = async (next: PropertyListing[]) => {
+    const prev = listings;
+    setListings(next);
+    setErrorMsg('');
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
+      if (onChange) {
+        await onChange(next);
+      }
+    } catch {
+      setListings(prev);
+      setErrorMsg('Failed to persist property listings.');
+    }
+  };
+
+  const activeProperty = useMemo(
+    () => listings.find(l => l.id === selectedId) || listings[0],
+    [listings, selectedId]
+  );
+
+  const monthlyMortgage = useMemo(() => {
+    if (!activeProperty) return 0;
+    const principal = activeProperty.price * (1 - downPaymentPct / 100);
+    const monthlyRate = interestRatePct / 100 / 12;
+    const n = loanTermYears * 12;
+    if (monthlyRate <= 0) return principal / Math.max(1, n);
+    return (principal * (monthlyRate * Math.pow(1 + monthlyRate, n))) / (Math.pow(1 + monthlyRate, n) - 1);
+  }, [activeProperty, downPaymentPct, interestRatePct, loanTermYears]);
+
+  const handleCityChange = (nextCity: string) => {
+    setCity(nextCity);
+    const preset = CITY_COORDS[nextCity.trim().toLowerCase()];
+    if (preset) {
+      setLatInput(String(preset.lat));
+      setLngInput(String(preset.lng));
+    }
+  };
+
+  const handleAddListing = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTitle.trim()) return;
+    const parsedPrice = Number(price);
+    const parsedLat = Number(latInput);
+    const parsedLng = Number(lngInput);
+    if (!title.trim() || !city.trim() || Number.isNaN(parsedPrice) || parsedPrice <= 0) {
+      setErrorMsg('Title, city, and positive price are required.');
+      return;
+    }
+    const fallbackCoords = CITY_COORDS[city.trim().toLowerCase()] || { lat: 30.2672, lng: -97.7431 };
     const created: PropertyListing = {
-      id: `prop-${Date.now().toString().slice(-4)}`,
-      title: newTitle.trim(),
-      city: newCity.trim(),
-      price: Math.max(50000, Number(newPrice) || 500000),
+      id: makeUniqueId(),
+      title: title.trim(),
+      city: city.trim(),
+      price: parsedPrice,
       beds: 4,
       baths: 3,
-      sqft: 3100,
-      lat: 36.1699,
-      lng: -115.1398,
-      virtualTourScenes: ['Main Living Salon (360°)', 'Skyline Balcony (360°)'],
+      sqft: 3200,
+      lat: Number.isFinite(parsedLat) ? parsedLat : fallbackCoords.lat,
+      lng: Number.isFinite(parsedLng) ? parsedLng : fallbackCoords.lng,
+      virtualTourUrl: `https://tours.agentmidas.dev/${Date.now()}`
     };
-    const next = [created, ...listings];
-    setListings(next);
+    setTitle('');
     setSelectedId(created.id);
-    setActiveSceneIdx(0);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch {}
-    setNewTitle('');
+    void persistListings([created, ...listings]);
   };
 
   return (
-    <section aria-label="Real Estate Listing Portal" className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans">
-      <div className="max-w-6xl mx-auto space-y-6">
-        <header className="border-b border-[#262626] pb-4">
-          <h1 className="text-2xl md:text-3xl font-bold text-[#D4AF37]">Real Estate Listing Portal</h1>
-          <p className="text-sm text-[#A3A3A3]">Interactive Map Coordinates, 360° Virtual Tour Switcher & Property Manager</p>
+    <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
+      <div className="max-w-7xl mx-auto space-y-6">
+        <header className="border-b border-zinc-800 pb-4">
+          <h1 className="text-2xl font-bold text-[#D4AF37]">Luxury Real Estate Portal, Map & Mortgage Calculator</h1>
         </header>
 
+        {errorMsg && (
+          <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">
+            {errorMsg}
+          </div>
+        )}
+
+        <form onSubmit={handleAddListing} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-6 gap-3">
+          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Property Title" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input value={city} onChange={e => handleCityChange(e.target.value)} placeholder="City" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input type="number" value={price} onChange={e => setPrice(e.target.value)} placeholder="Price ($)" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input type="number" step="0.0001" value={latInput} onChange={e => setLatInput(e.target.value)} placeholder="Latitude" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <input type="number" step="0.0001" value={lngInput} onChange={e => setLngInput(e.target.value)} placeholder="Longitude" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <button type="submit" className="bg-[#D4AF37] text-black font-bold text-sm rounded px-4 py-2">+ Add Listing</button>
+        </form>
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 space-y-4">
+          <div className="space-y-3">
             {listings.map(item => (
-              <div
+              <button
                 key={item.id}
-                onClick={() => {
-                  setSelectedId(item.id);
-                  setActiveSceneIdx(0);
-                }}
-                className={`p-5 rounded-xl bg-[#0D0D0D] border cursor-pointer ${
-                  selected?.id === item.id ? 'border-[#D4AF37]' : 'border-[#262626]'
+                type="button"
+                onClick={() => setSelectedId(item.id)}
+                className={`w-full text-left p-4 rounded-xl border transition ${
+                  activeProperty?.id === item.id ? 'bg-zinc-800 border-[#D4AF37]' : 'bg-zinc-900 border-zinc-800'
                 }`}
               >
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h2 className="text-lg font-bold text-[#F5F5F5]">{item.title}</h2>
-                    <p className="text-xs text-[#A3A3A3]">
-                      {item.city} • GPS: {item.lat.toFixed(4)}, {item.lng.toFixed(4)}
-                    </p>
-                  </div>
-                  <p className="text-xl font-bold text-[#D4AF37]">${item.price.toLocaleString()}</p>
-                </div>
-                <p className="text-xs text-[#A3A3A3] mt-2">
-                  {item.beds} Beds • {item.baths} Baths • {item.sqft.toLocaleString()} sq.ft
-                </p>
-              </div>
+                <div className="font-bold text-white">{item.title}</div>
+                <div className="text-xs text-zinc-400">{item.city} · ({item.lat.toFixed(4)}, {item.lng.toFixed(4)})</div>
+                <div className="text-lg font-bold text-[#D4AF37] mt-1">${item.price.toLocaleString()}</div>
+              </button>
             ))}
-
-            <form onSubmit={handleAddProperty} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4 grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
-              <div>
-                <label htmlFor="re-title" className="block text-xs text-[#A3A3A3] mb-1">Property Title</label>
-                <input id="re-title" type="text" required value={newTitle} onChange={e => setNewTitle(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-1.5 text-sm" />
-              </div>
-              <div>
-                <label htmlFor="re-city" className="block text-xs text-[#A3A3A3] mb-1">City</label>
-                <input id="re-city" type="text" required value={newCity} onChange={e => setNewCity(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-1.5 text-sm" />
-              </div>
-              <div>
-                <label htmlFor="re-price" className="block text-xs text-[#A3A3A3] mb-1">Price ($)</label>
-                <input id="re-price" type="number" value={newPrice} onChange={e => setNewPrice(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-1.5 text-sm" />
-              </div>
-              <button type="submit" className="py-2 rounded bg-[#D4AF37] text-[#0A0A0A] font-bold text-xs">+ Publish Listing</button>
-            </form>
           </div>
 
-          <aside className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-4">
-            <h2 className="text-lg font-semibold text-[#D4AF37]">Interactive Map & 360° Virtual Tour</h2>
-            {selected && (
-              <>
-                <div className="p-4 rounded-xl bg-[#141414] border border-[#262626] space-y-1">
-                  <p className="text-xs uppercase text-[#A3A3A3]">Geospatial Map Pin</p>
-                  <p className="font-mono text-sm text-[#22C55E]">
-                    Lat {selected.lat.toFixed(4)}° N, Lng {selected.lng.toFixed(4)}° W
-                  </p>
-                  <p className="text-xs text-[#A3A3A3]">{selected.city}</p>
-                </div>
+          {activeProperty && (
+            <div className="lg:col-span-2 space-y-6">
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
+                <h2 className="text-xl font-bold text-white">{activeProperty.title} — {activeProperty.city}</h2>
+                <p className="text-sm text-[#D4AF37] font-mono">
+                  Geospatial Map Pin: Lat {activeProperty.lat.toFixed(4)}, Lng {activeProperty.lng.toFixed(4)}
+                </p>
+                <p className="text-xs text-zinc-300">
+                  3D Virtual Tour: <a href={activeProperty.virtualTourUrl} className="underline text-[#D4AF37]">{activeProperty.virtualTourUrl}</a>
+                </p>
+              </div>
 
-                <div className="p-4 rounded-xl bg-[#141414] border border-[#D4AF37]/40 space-y-3">
-                  <p className="text-xs uppercase text-[#D4AF37]">Active 360° Virtual Tour Room</p>
-                  <p className="text-base font-bold text-[#F5F5F5]">
-                    {selected.virtualTourScenes[activeSceneIdx] ?? selected.virtualTourScenes[0]}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {selected.virtualTourScenes.map((scene, idx) => (
-                      <button
-                        key={scene}
-                        type="button"
-                        onClick={() => setActiveSceneIdx(idx)}
-                        className={`px-2.5 py-1 rounded text-xs font-semibold ${
-                          activeSceneIdx === idx ? 'bg-[#D4AF37] text-[#0A0A0A]' : 'bg-[#0A0A0A] text-[#A3A3A3] border border-[#262626]'
-                        }`}
-                      >
-                        Room #{idx + 1}
-                      </button>
-                    ))}
-                  </div>
+              {/* Interactive Mortgage Calculator */}
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+                <h3 className="text-base font-bold text-[#D4AF37]">Interactive Mortgage Payment Calculator</h3>
+                <div className="grid grid-cols-3 gap-3">
+                  <label className="text-xs text-zinc-400">
+                    Down Payment (%)
+                    <input type="number" min={0} max={90} value={downPaymentPct} onChange={e => setDownPaymentPct(Number(e.target.value))} className="mt-1 w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
+                  </label>
+                  <label className="text-xs text-zinc-400">
+                    APR Interest (%)
+                    <input type="number" step="0.1" min={0.5} max={20} value={interestRatePct} onChange={e => setInterestRatePct(Number(e.target.value))} className="mt-1 w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white" />
+                  </label>
+                  <label className="text-xs text-zinc-400">
+                    Term (Years)
+                    <select value={loanTermYears} onChange={e => setLoanTermYears(Number(e.target.value))} className="mt-1 w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-white">
+                      <option value={15}>15 Years</option>
+                      <option value={30}>30 Years</option>
+                    </select>
+                  </label>
                 </div>
-              </>
-            )}
-          </aside>
+                <div className="text-lg font-bold text-emerald-400">
+                  Estimated Principal & Interest: ${Math.round(monthlyMortgage).toLocaleString()} / month
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
-    </section>
+    </div>
   );
-}
+};
 
 export default RealEstateListingPortal;
