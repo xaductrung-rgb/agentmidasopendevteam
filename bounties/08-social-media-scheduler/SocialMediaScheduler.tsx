@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+'use client';
+import React, { useState, useRef } from 'react';
 
 export type SocialPlatform = 'X' | 'LinkedIn' | 'Instagram' | 'YouTube';
 
@@ -20,6 +21,13 @@ export interface SocialMediaSchedulerProps {
 }
 
 const ALL_PLATFORMS: SocialPlatform[] = ['X', 'LinkedIn', 'Instagram', 'YouTube'];
+
+const PLATFORM_CHAR_LIMITS: Record<SocialPlatform, number> = {
+  X: 280,
+  LinkedIn: 3000,
+  Instagram: 2200,
+  YouTube: 5000
+};
 
 const DEFAULT_POSTS: ScheduledSocialPost[] = [
   {
@@ -51,10 +59,11 @@ export const SocialMediaScheduler: React.FC<SocialMediaSchedulerProps> = ({
   });
 
   const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(['X', 'LinkedIn']);
-  const [content, setContent] = useState('');
+  const [content, setContent] = useState('Launching our new affiliate analytics suite today! #AgentMidas');
   const [scheduledAt, setScheduledAt] = useState('2026-12-01T14:00');
   const [errorMsg, setErrorMsg] = useState('');
   const [notice, setNotice] = useState('');
+  const saveSeqRef = useRef(0);
 
   const togglePlatform = (p: SocialPlatform) => {
     setSelectedPlatforms(curr =>
@@ -75,6 +84,11 @@ export const SocialMediaScheduler: React.FC<SocialMediaSchedulerProps> = ({
       setErrorMsg('Post content cannot be empty.');
       return;
     }
+    const overLimit = selectedPlatforms.find(p => content.trim().length > PLATFORM_CHAR_LIMITS[p]);
+    if (overLimit) {
+      setErrorMsg(`Content exceeds ${overLimit} character limit (${PLATFORM_CHAR_LIMITS[overLimit]} chars).`);
+      return;
+    }
     const parsedTime = Date.parse(scheduledAt);
     if (Number.isNaN(parsedTime) || parsedTime <= nowMs) {
       setErrorMsg('Schedule time must be a valid future timestamp.');
@@ -91,71 +105,110 @@ export const SocialMediaScheduler: React.FC<SocialMediaSchedulerProps> = ({
       engagementRatePct: 0
     };
 
+    const seq = ++saveSeqRef.current;
     const prev = posts;
     const next = [created, ...posts];
     setPosts(next);
     try {
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
       if (onChange) {
         await onChange(next);
+      }
+      if (seq !== saveSeqRef.current) return;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
       }
       setContent('');
       setNotice(`Scheduled post across ${created.platforms.join(', ')} for ${scheduledAt.replace('T', ' ')}.`);
     } catch {
-      setPosts(prev);
-      setErrorMsg('Failed to save scheduled post to storage; changes rolled back.');
+      if (seq === saveSeqRef.current) {
+        setPosts(prev);
+        setErrorMsg('Failed to save scheduled post to storage; changes rolled back.');
+      }
     }
   };
 
   return (
     <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
-      <div className="max-w-5xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         <header className="border-b border-zinc-800 pb-4">
-          <h1 className="text-2xl font-bold text-[#D4AF37]">Multi-Platform Social Media Scheduler</h1>
-          <p className="text-sm text-zinc-400">Cross-post scheduling across X, LinkedIn, Instagram, and YouTube</p>
+          <h1 className="text-2xl font-bold text-[#D4AF37]">Multi-Platform Social Media Scheduler & Live Preview</h1>
+          <p className="text-sm text-zinc-400">Cross-post scheduling and real-time card previews across X, LinkedIn, Instagram, and YouTube</p>
         </header>
 
         {notice && <div role="status" className="bg-emerald-950/60 border border-emerald-700 text-emerald-200 px-4 py-2 rounded text-sm">{notice}</div>}
         {errorMsg && <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{errorMsg}</div>}
 
-        <form onSubmit={handleSchedulePost} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
-          <div className="flex flex-wrap gap-3 items-center">
-            <span className="text-xs text-zinc-400 font-bold uppercase">Target Platforms:</span>
-            {ALL_PLATFORMS.map(p => (
-              <label key={p} className="flex items-center gap-1.5 text-sm text-zinc-200 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={selectedPlatforms.includes(p)}
-                  onChange={() => togglePlatform(p)}
-                />
-                {p}
-              </label>
-            ))}
-          </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <form onSubmit={handleSchedulePost} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+            <div className="flex flex-wrap gap-3 items-center">
+              <span className="text-xs text-zinc-400 font-bold uppercase">Target Platforms:</span>
+              {ALL_PLATFORMS.map(p => (
+                <label key={p} className="flex items-center gap-1.5 text-sm text-zinc-200 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedPlatforms.includes(p)}
+                    onChange={() => togglePlatform(p)}
+                  />
+                  {p}
+                </label>
+              ))}
+            </div>
 
-          <textarea
-            rows={3}
-            placeholder="Write your multi-platform post..."
-            value={content}
-            onChange={e => setContent(e.target.value)}
-            className="w-full bg-zinc-950 border border-zinc-800 rounded p-3 text-sm text-white"
-          />
-
-          <div className="flex flex-wrap justify-between items-center gap-3">
-            <input
-              type="datetime-local"
-              aria-label="Scheduled Publish Time"
-              value={scheduledAt}
-              onChange={e => setScheduledAt(e.target.value)}
-              className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
+            <textarea
+              rows={4}
+              placeholder="Write your multi-platform post..."
+              value={content}
+              onChange={e => setContent(e.target.value)}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded p-3 text-sm text-white"
             />
-            <button type="submit" className="bg-[#D4AF37] text-black font-bold text-sm px-5 py-2 rounded">
-              Schedule Multi-Platform Post
-            </button>
+
+            <div className="flex flex-wrap justify-between items-center gap-3">
+              <input
+                type="datetime-local"
+                aria-label="Scheduled Publish Time"
+                value={scheduledAt}
+                onChange={e => setScheduledAt(e.target.value)}
+                className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
+              />
+              <button type="submit" className="bg-[#D4AF37] text-black font-bold text-sm px-5 py-2 rounded">
+                Schedule Multi-Platform Post
+              </button>
+            </div>
+          </form>
+
+          {/* Live Multi-Platform Post Preview Panel */}
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3" aria-label="Live Post Preview">
+            <h2 className="text-sm font-bold text-[#D4AF37] uppercase tracking-wider">
+              Live Multi-Platform Preview ({selectedPlatforms.length} selected)
+            </h2>
+            {selectedPlatforms.length === 0 ? (
+              <p className="text-xs text-zinc-500">Select at least one platform to preview formatting.</p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {selectedPlatforms.map(plat => {
+                  const limit = PLATFORM_CHAR_LIMITS[plat];
+                  const len = content.trim().length;
+                  return (
+                    <div key={plat} className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 space-y-2">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="font-bold text-[#D4AF37]">{plat} Feed Preview</span>
+                        <span className={len > limit ? 'text-red-400 font-bold' : 'text-zinc-400'}>
+                          {len} / {limit} chars
+                        </span>
+                      </div>
+                      <p className="text-xs text-zinc-200 whitespace-pre-wrap break-words">
+                        {content.trim() || 'Draft post content will appear here...'}
+                      </p>
+                      <div className="text-[11px] text-zinc-500">
+                        Scheduled: {scheduledAt ? scheduledAt.replace('T', ' ') : 'Unscheduled'}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-        </form>
+        </div>
 
         <div className="space-y-3">
           {posts.map(p => (
