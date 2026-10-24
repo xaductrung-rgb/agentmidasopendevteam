@@ -1,455 +1,125 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
-export interface RecordItem {
+export interface EmailCampaign {
   id: string;
-  parentId: string | null;
-  depth: number;
-  name: string;
-  category: string;
-  status: 'Active' | 'Pending' | 'Completed' | 'Compressed';
-  primaryMetric: number;
-  sampleSize: number;
-  conversions: number;
-  retryAttempts: number;
-  passupRecipient: string;
-  updatedAt: string;
-  notes: string;
+  subject: string;
+  headlineBlock: string;
+  ctaText: string;
+  scheduledAt: string;
+  sentCount: number;
+  openRate: number;
+  clickRate: number;
+  status: 'Scheduled' | 'Sent';
 }
 
-export interface EmailCampaignBuilderProps {
-  initialItems?: RecordItem[];
-  storageKey?: string;
-}
-
-const DEFAULT_ITEMS: RecordItem[] = [
+const DEFAULT_CAMPAIGNS: EmailCampaign[] = [
   {
-    id: 'AM-301',
-    parentId: null,
-    depth: 0,
-    name: 'Email Campaign Builder — Root Sponsor / Control Node',
-    category: 'Tier-1 Production',
-    status: 'Active',
-    primaryMetric: 14850,
-    sampleSize: 2400,
-    conversions: 356,
-    retryAttempts: 0,
-    passupRecipient: 'Root Sponsor (Direct 75%)',
-    updatedAt: '2026-10-24 06:15 UTC',
-    notes: 'Visual block-based email template builder with cohort scheduling and open/click attribution analytics'
+    id: 'em-1',
+    subject: 'Unlock Your 75% Agent Midas Partner Commission',
+    headlineBlock: 'Scale recurring revenue with Two-Up automated attribution.',
+    ctaText: 'Activate Partner Portal',
+    scheduledAt: '2026-10-25T10:00',
+    sentCount: 4200,
+    openRate: 48.5,
+    clickRate: 14.2,
+    status: 'Sent',
   },
-  {
-    id: 'AM-302',
-    parentId: 'AM-301',
-    depth: 1,
-    name: 'Email Campaign Builder — Sale #1 (Two-Up Passup to Root)',
-    category: 'Automation',
-    status: 'Active',
-    primaryMetric: 8420,
-    sampleSize: 2350,
-    conversions: 452,
-    retryAttempts: 1,
-    passupRecipient: 'AM-301 (Two-Up Passup #1)',
-    updatedAt: '2026-10-24 06:40 UTC',
-    notes: 'First qualifying sale passed up to upline sponsor under Two-Up rules.'
-  },
-  {
-    id: 'AM-303',
-    parentId: 'AM-301',
-    depth: 1,
-    name: 'Email Campaign Builder — Inactive Node (Dynamic Compression)',
-    category: 'Optimization',
-    status: 'Compressed',
-    primaryMetric: 0,
-    sampleSize: 1800,
-    conversions: 210,
-    retryAttempts: 2,
-    passupRecipient: 'Compressed to AM-301',
-    updatedAt: '2026-10-24 07:05 UTC',
-    notes: 'Inactive node automatically compressed so child volume rolls up without depth loss.'
-  },
-  {
-    id: 'AM-304',
-    parentId: 'AM-303',
-    depth: 2,
-    name: 'Email Campaign Builder — Sale #3 (Retained Direct 75% Stream)',
-    category: 'Compliance',
-    status: 'Active',
-    primaryMetric: 6190,
-    sampleSize: 1950,
-    conversions: 312,
-    retryAttempts: 0,
-    passupRecipient: 'Retained by Direct Qualifier (Effective Depth 1 after Compression)',
-    updatedAt: '2026-10-24 07:10 UTC',
-    notes: 'Third and subsequent referrals remain permanently on direct sponsor leg.'
-  }
 ];
 
-export function EmailCampaignBuilder({
-  initialItems = DEFAULT_ITEMS,
-  storageKey = 'agentmidas_bounty_3_v2',
-}: EmailCampaignBuilderProps = {}) {
-  const [items, setItems] = useState<RecordItem[]>(initialItems);
-  const [query, setQuery] = useState<string>('');
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [enableCompression, setEnableCompression] = useState<boolean>(true);
-  const [newName, setNewName] = useState<string>('');
-  const [newParentId, setNewParentId] = useState<string>('AM-301');
-  const [newCategory, setNewCategory] = useState<string>('Tier-1 Production');
-  const [newPrimary, setNewPrimary] = useState<string>('5000');
-  const [selectedId, setSelectedId] = useState<string>(initialItems[0]?.id ?? 'AM-301');
+const STORAGE_KEY = 'agentmidas_email_campaigns_v2';
+
+export function EmailCampaignBuilder() {
+  const [campaigns, setCampaigns] = useState<EmailCampaign[]>(DEFAULT_CAMPAIGNS);
+  const [subject, setSubject] = useState<string>('Q4 Enterprise AI Launch Sequence');
+  const [headlineBlock, setHeadlineBlock] = useState<string>('Deploy autonomous agents across your CRM in 60 seconds.');
+  const [ctaText, setCtaText] = useState<string>('Claim Free Sandbox');
+  const [scheduledAt, setScheduledAt] = useState<string>('2026-10-26T14:00');
 
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(storageKey);
+      const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved) as RecordItem[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setItems(parsed);
-          setSelectedId(parsed[0].id);
-        }
+        const parsed = JSON.parse(saved) as EmailCampaign[];
+        if (Array.isArray(parsed) && parsed.length > 0) setCampaigns(parsed);
       }
     } catch {}
-  }, [storageKey]);
+  }, []);
 
-  const persistItems = (next: RecordItem[]) => {
-    setItems(next);
+  const handleScheduleCampaign = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!subject.trim()) return;
+    const created: EmailCampaign = {
+      id: `em-${Date.now().toString().slice(-4)}`,
+      subject: subject.trim(),
+      headlineBlock: headlineBlock.trim(),
+      ctaText: ctaText.trim(),
+      scheduledAt,
+      sentCount: 1500,
+      openRate: 44.0,
+      clickRate: 12.8,
+      status: 'Scheduled',
+    };
+    const next = [created, ...campaigns];
+    setCampaigns(next);
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(next));
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     } catch {}
   };
 
-  const filteredItems = useMemo(() => {
-    return items.filter(item => {
-      const matchesStatus = statusFilter === 'ALL' || item.status === statusFilter;
-      const q = query.trim().toLowerCase();
-      const matchesQuery =
-        !q ||
-        item.name.toLowerCase().includes(q) ||
-        item.id.toLowerCase().includes(q) ||
-        item.category.toLowerCase().includes(q);
-      return matchesStatus && matchesQuery;
-    });
-  }, [items, query, statusFilter]);
-
-  const summary = useMemo(() => {
-    const activeItems = items.filter(i => i.status === 'Active');
-    const totalVolume = activeItems.reduce((acc, i) => acc + i.primaryMetric, 0);
-    const totalSamples = items.reduce((acc, i) => acc + i.sampleSize, 0);
-    const totalConv = items.reduce((acc, i) => acc + i.conversions, 0);
-    const convRate = totalSamples > 0 ? (totalConv / totalSamples) * 100 : 0;
-
-    // Two-proportion Z-score calculation between first two cohorts
-    const a = items[0];
-    const b = items[1];
-    let zScore = 0;
-    if (a && b && a.sampleSize > 0 && b.sampleSize > 0) {
-      const p1 = a.conversions / a.sampleSize;
-      const p2 = b.conversions / b.sampleSize;
-      const pPool = (a.conversions + b.conversions) / (a.sampleSize + b.sampleSize);
-      const se = Math.sqrt(pPool * (1 - pPool) * (1 / a.sampleSize + 1 / b.sampleSize));
-      zScore = se > 0 ? Math.abs(p2 - p1) / se : 0;
-    }
-
-    return {
-      totalVolume,
-      convRate: convRate.toFixed(2),
-      zScore: zScore.toFixed(2),
-      isSignificant: zScore >= 1.96,
-      activeCount: activeItems.length,
-    };
-  }, [items]);
-
-  const selectedItem = useMemo(
-    () => items.find(i => i.id === selectedId) ?? items[0],
-    [items, selectedId]
-  );
-
-  function handleCreateRecord(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!newName.trim()) return;
-    const parentNode = items.find(i => i.id === newParentId) ?? null;
-    const siblingCount = items.filter(i => i.parentId === newParentId).length;
-    const isTwoUpPassup = siblingCount < 2 && parentNode !== null;
-
-    const created: RecordItem = {
-      id: `AM-3${String(items.length + 1).padStart(2, '0')}`,
-      parentId: parentNode ? parentNode.id : null,
-      depth: parentNode ? parentNode.depth + 1 : 0,
-      name: newName.trim(),
-      category: newCategory,
-      status: 'Active',
-      primaryMetric: Math.max(0, Number(newPrimary) || 0),
-      sampleSize: 1000,
-      conversions: 165,
-      retryAttempts: 0,
-      passupRecipient: isTwoUpPassup
-        ? `Passed Up to ${parentNode?.parentId ?? parentNode?.id} (Two-Up Sale #${siblingCount + 1})`
-        : `Retained by ${parentNode?.id ?? 'Root'} (Direct 75%)`,
-      updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC',
-      notes: 'Persisted to localStorage with Two-Up passup & dynamic compression evaluation.',
-    };
-    persistItems([created, ...items]);
-    setSelectedId(created.id);
-    setNewName('');
-  }
-
-  function handleCycleStatus(id: string) {
-    const order: RecordItem['status'][] = ['Active', 'Pending', 'Completed', 'Compressed'];
-    persistItems(
-      items.map(item => {
-        if (item.id !== id) return item;
-        const idx = order.indexOf(item.status);
-        const next = order[(idx + 1) % order.length];
-        return { ...item, status: next };
-      })
-    );
-  }
-
   return (
-    <section
-      aria-label="Email Campaign Builder"
-      className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans"
-    >
-      <div className="max-w-7xl mx-auto space-y-6">
-        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-[#262626] pb-5">
+    <section aria-label="Email Campaign Builder" className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans">
+      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <form onSubmit={handleScheduleCampaign} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-4">
+          <h1 className="text-2xl font-bold text-[#D4AF37]">Email Campaign Builder</h1>
           <div>
-            <span className="inline-block text-xs uppercase tracking-widest text-[#D4AF37] font-semibold">
-              Agent Midas Bounty #3 • $300
-            </span>
-            <h1 className="text-2xl md:text-3xl font-bold text-[#F5F5F5] mt-1">
-              Email Campaign Builder
-            </h1>
-            <p className="text-sm text-[#A3A3A3] mt-1">
-              Visual block-based email template builder with cohort scheduling and open/click attribution analytics
-            </p>
+            <label htmlFor="em-subject" className="block text-xs text-[#A3A3A3] mb-1">Subject Line</label>
+            <input id="em-subject" type="text" required value={subject} onChange={e => setSubject(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]" />
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <label htmlFor="search-input-3" className="sr-only">Search records</label>
-            <input
-              id="search-input-3"
-              type="search"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder="Search ID, name, category..."
-              className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-            />
-            <label htmlFor="status-filter-3" className="sr-only">Filter by status</label>
-            <select
-              id="status-filter-3"
-              value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value)}
-              className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="Active">Active</option>
-              <option value="Pending">Pending</option>
-              <option value="Completed">Completed</option>
-              <option value="Compressed">Compressed</option>
-            </select>
-            <label htmlFor="compression-toggle-3" className="flex items-center gap-2 text-xs text-[#D4AF37] cursor-pointer">
-              <input
-                id="compression-toggle-3"
-                type="checkbox"
-                checked={enableCompression}
-                onChange={e => setEnableCompression(e.target.checked)}
-                className="accent-[#D4AF37]"
-              />
-              Dynamic Compression
-            </label>
+          <div>
+            <label htmlFor="em-headline" className="block text-xs text-[#A3A3A3] mb-1">Hero Body Copy Block</label>
+            <textarea id="em-headline" rows={3} value={headlineBlock} onChange={e => setHeadlineBlock(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]" />
           </div>
-        </header>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Active Volume (Persisted)</p>
-            <p className="text-2xl font-bold text-[#D4AF37] mt-1">
-              ${summary.totalVolume.toLocaleString()}
-            </p>
-          </div>
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Active Nodes / Streams</p>
-            <p className="text-2xl font-bold text-[#22C55E] mt-1">
-              {summary.activeCount} / {items.length}
-            </p>
-          </div>
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Aggregate Conversion Rate</p>
-            <p className="text-2xl font-bold text-[#F5F5F5] mt-1">
-              {summary.convRate}%
-            </p>
-          </div>
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Z-Score Significance</p>
-            <p className="text-2xl font-bold text-[#3B82F6] mt-1">
-              Z = {summary.zScore} ({summary.isSignificant ? '95%+ Conf.' : 'Collecting'})
-            </p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-4">
-            <h2 className="text-lg font-semibold text-[#D4AF37]">
-              Hierarchical Matrix & Pass-Up Routing ({filteredItems.length})
-            </h2>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-sm">
-                <thead>
-                  <tr className="border-b border-[#262626] text-[#A3A3A3]">
-                    <th className="py-2 pr-3">Node / Depth</th>
-                    <th className="py-2 pr-3">Name & Parent Link</th>
-                    <th className="py-2 pr-3">Pass-Up / Routing</th>
-                    <th className="py-2 pr-3">Volume</th>
-                    <th className="py-2 pr-3">Status</th>
-                    <th className="py-2">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredItems.map(item => {
-                    const effectiveDepth =
-                      enableCompression && item.parentId
-                        ? Math.max(0, item.depth - (items.find(p => p.id === item.parentId)?.status === 'Compressed' ? 1 : 0))
-                        : item.depth;
-                    const rate = item.sampleSize > 0 ? ((item.conversions / item.sampleSize) * 100).toFixed(1) : '0.0';
-                    return (
-                      <tr
-                        key={item.id}
-                        tabIndex={0}
-                        role="button"
-                        aria-pressed={selectedItem?.id === item.id}
-                        onClick={() => setSelectedId(item.id)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            setSelectedId(item.id);
-                          }
-                        }}
-                        className={`border-b border-[#1A1A1A] cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-[#D4AF37] ${
-                          selectedItem?.id === item.id ? 'bg-[#171717]' : 'hover:bg-[#121212]'
-                        }`}
-                      >
-                        <td className="py-3 pr-3 font-mono text-xs text-[#D4AF37]">
-                          <span style={{ paddingLeft: `${effectiveDepth * 12}px` }}>
-                            {effectiveDepth > 0 ? '└─ ' : ''}{item.id} (L{effectiveDepth})
-                          </span>
-                        </td>
-                        <td className="py-3 pr-3">
-                          <p className="font-medium text-[#F5F5F5]">{item.name}</p>
-                          <p className="text-xs text-[#A3A3A3]">
-                            Parent: {item.parentId ?? 'ROOT'} • Conv: {rate}% (Retry #{item.retryAttempts})
-                          </p>
-                        </td>
-                        <td className="py-3 pr-3 text-xs text-[#A3A3A3]">{item.passupRecipient}</td>
-                        <td className="py-3 pr-3 font-mono">${item.primaryMetric.toLocaleString()}</td>
-                        <td className="py-3 pr-3">
-                          <span className="px-2 py-0.5 rounded text-xs font-semibold bg-[#1F1F1F] text-[#D4AF37] border border-[#D4AF37]/40">
-                            {item.status}
-                          </span>
-                        </td>
-                        <td className="py-3">
-                          <button
-                            type="button"
-                            onClick={ev => {
-                              ev.stopPropagation();
-                              handleCycleStatus(item.id);
-                            }}
-                            className="px-2.5 py-1 rounded bg-[#D4AF37] text-[#0A0A0A] font-semibold text-xs hover:bg-[#E8C547]"
-                          >
-                            Cycle Status
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <aside className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-5">
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <h2 className="text-lg font-semibold text-[#D4AF37]">Node Inspector & Persistent Creator</h2>
-              {selectedItem && (
-                <div className="mt-3 p-3 rounded-lg bg-[#141414] border border-[#262626] space-y-1.5 text-xs">
-                  <p className="text-[#D4AF37] font-mono font-bold">
-                    {selectedItem.id} (Parent: {selectedItem.parentId ?? 'ROOT'})
-                  </p>
-                  <p className="text-sm font-semibold text-[#F5F5F5]">{selectedItem.name}</p>
-                  <p className="text-[#22C55E]">Routing: {selectedItem.passupRecipient}</p>
-                  <p className="text-[#A3A3A3]">{selectedItem.notes}</p>
-                  <p className="text-[#666666]">Updated: {selectedItem.updatedAt}</p>
-                </div>
-              )}
+              <label htmlFor="em-cta" className="block text-xs text-[#A3A3A3] mb-1">CTA Button Label</label>
+              <input id="em-cta" type="text" value={ctaText} onChange={e => setCtaText(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]" />
             </div>
+            <div>
+              <label htmlFor="em-schedule" className="block text-xs text-[#A3A3A3] mb-1">Send Schedule</label>
+              <input id="em-schedule" type="datetime-local" value={scheduledAt} onChange={e => setScheduledAt(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]" />
+            </div>
+          </div>
+          <button type="submit" className="w-full py-2.5 rounded-lg bg-[#D4AF37] text-[#0A0A0A] font-bold text-sm">
+            Schedule & Save Campaign
+          </button>
+        </form>
 
-            <form onSubmit={handleCreateRecord} className="space-y-3 border-t border-[#262626] pt-4">
-              <h3 className="text-sm font-semibold text-[#F5F5F5]">Add Child Node / Entry</h3>
-              <div>
-                <label htmlFor="entry-name-3" className="block text-xs text-[#A3A3A3] mb-1">
-                  Entry / Node Name
-                </label>
-                <input
-                  id="entry-name-3"
-                  type="text"
-                  required
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  placeholder="Enter node or workflow title..."
-                  className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                />
+        <div className="space-y-4">
+          <div className="bg-[#0D0D0D] border border-[#D4AF37]/50 rounded-xl p-5 space-y-3">
+            <p className="text-xs uppercase text-[#D4AF37]">Live Visual Template Preview</p>
+            <h2 className="text-lg font-bold">{subject}</h2>
+            <p className="text-sm text-[#A3A3A3]">{headlineBlock}</p>
+            <span className="inline-block px-4 py-2 rounded bg-[#D4AF37] text-[#0A0A0A] font-bold text-xs">
+              {ctaText}
+            </span>
+          </div>
+
+          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-2">
+            <h3 className="text-sm font-semibold text-[#D4AF37]">Campaign Analytics & Queue ({campaigns.length})</h3>
+            {campaigns.map(c => (
+              <div key={c.id} className="p-3 rounded bg-[#141414] border border-[#262626] flex justify-between items-center text-xs">
+                <div>
+                  <p className="font-bold text-[#F5F5F5]">{c.subject}</p>
+                  <p className="text-[#A3A3A3]">{c.status} • {c.scheduledAt.replace('T', ' ')}</p>
+                </div>
+                <div className="text-right font-mono text-[#22C55E]">
+                  Open {c.openRate}% • Click {c.clickRate}%
+                </div>
               </div>
-              <div>
-                <label htmlFor="parent-node-3" className="block text-xs text-[#A3A3A3] mb-1">
-                  Parent Sponsor / Upstream Node
-                </label>
-                <select
-                  id="parent-node-3"
-                  value={newParentId}
-                  onChange={e => setNewParentId(e.target.value)}
-                  className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                >
-                  {items.map(i => (
-                    <option key={i.id} value={i.id}>{i.id} — {i.name.slice(0, 28)}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="entry-cat-3" className="block text-xs text-[#A3A3A3] mb-1">
-                  Category
-                </label>
-                <select
-                  id="entry-cat-3"
-                  value={newCategory}
-                  onChange={e => setNewCategory(e.target.value)}
-                  className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                >
-                  <option value="Tier-1 Production">Tier-1 Production</option>
-                  <option value="Automation">Automation</option>
-                  <option value="Optimization">Optimization</option>
-                  <option value="Compliance">Compliance</option>
-                </select>
-              </div>
-              <div>
-                <label htmlFor="entry-val-3" className="block text-xs text-[#A3A3A3] mb-1">
-                  Projected Value (USD)
-                </label>
-                <input
-                  id="entry-val-3"
-                  type="number"
-                  value={newPrimary}
-                  onChange={e => setNewPrimary(e.target.value)}
-                  className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                />
-              </div>
-              <button
-                type="submit"
-                className="w-full py-2.5 rounded-lg bg-[#D4AF37] text-[#0A0A0A] font-bold text-sm hover:bg-[#E8C547]"
-              >
-                + Launch & Persist Entry
-              </button>
-            </form>
-          </aside>
+            ))}
+          </div>
         </div>
       </div>
     </section>
