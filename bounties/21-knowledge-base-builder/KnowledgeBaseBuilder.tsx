@@ -47,6 +47,31 @@ const DEFAULT_ARTICLES: KBArticle[] = [
   }
 ];
 
+function normalizeUniqueArticles(list: any[]): KBArticle[] {
+  const seen = new Set<string>();
+  const out: KBArticle[] = [];
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i];
+    if (!item || typeof item !== 'object' || typeof item.title !== 'string' || typeof item.body !== 'string') continue;
+    let id = typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `KB-${101 + i}`;
+    while (seen.has(id)) {
+      id = `${id}-${i + 1}`;
+    }
+    seen.add(id);
+    out.push({
+      id,
+      title: item.title,
+      parentCategory: typeof item.parentCategory === 'string' && item.parentCategory ? item.parentCategory : 'General',
+      subCategory: typeof item.subCategory === 'string' && item.subCategory ? item.subCategory : 'Overview',
+      tags: Array.isArray(item.tags) ? item.tags.map(String) : [],
+      body: item.body,
+      helpfulYes: typeof item.helpfulYes === 'number' ? item.helpfulYes : 0,
+      helpfulNo: typeof item.helpfulNo === 'number' ? item.helpfulNo : 0
+    });
+  }
+  return out;
+}
+
 export const KnowledgeBaseBuilder: React.FC<KnowledgeBaseBuilderProps> = ({
   storageKey = 'agentmidas_kb_builder_v2',
   initialArticles = DEFAULT_ARTICLES,
@@ -57,10 +82,13 @@ export const KnowledgeBaseBuilder: React.FC<KnowledgeBaseBuilderProps> = ({
       const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) {
+          const valid = normalizeUniqueArticles(parsed);
+          if (valid.length > 0) return valid;
+        }
       }
     } catch {}
-    return initialArticles;
+    return normalizeUniqueArticles(initialArticles);
   });
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -77,16 +105,17 @@ export const KnowledgeBaseBuilder: React.FC<KnowledgeBaseBuilderProps> = ({
 
   const persistArticles = async (next: KBArticle[]): Promise<boolean> => {
     const seq = ++saveSeqRef.current;
+    const deduped = normalizeUniqueArticles(next);
     const prev = articles;
-    setArticles(next);
+    setArticles(deduped);
     setErrorMsg('');
     try {
       if (onChange) {
-        await onChange(next);
+        await onChange(deduped);
       }
       if (seq !== saveSeqRef.current) return true;
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
+        window.localStorage.setItem(storageKey, JSON.stringify(deduped));
       }
       return true;
     } catch {
@@ -101,10 +130,12 @@ export const KnowledgeBaseBuilder: React.FC<KnowledgeBaseBuilderProps> = ({
   const generateCollisionFreeId = (existing: KBArticle[]): string => {
     const used = new Set(existing.map(a => a.id));
     let n = 101 + existing.length;
-    while (used.has(`KB-${n}`)) {
+    let candidate = `KB-${n}`;
+    while (used.has(candidate)) {
       n += 1;
+      candidate = `KB-${n}`;
     }
-    return `KB-${n}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+    return candidate;
   };
 
   const parentCategories = useMemo(
@@ -155,34 +186,40 @@ export const KnowledgeBaseBuilder: React.FC<KnowledgeBaseBuilderProps> = ({
 
   const handleCreateArticle = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !parentCategory.trim() || !subCategory.trim() || !body.trim()) {
+    const submittedTitle = title;
+    const submittedBody = body;
+    if (!submittedTitle.trim() || !parentCategory.trim() || !subCategory.trim() || !submittedBody.trim()) {
       setErrorMsg('Title, parent category, sub-category, and article body are required.');
       return;
     }
     const created: KBArticle = {
       id: generateCollisionFreeId(articles),
-      title: title.trim(),
+      title: submittedTitle.trim(),
       parentCategory: parentCategory.trim(),
       subCategory: subCategory.trim(),
       tags: tagsInput.split(',').map(t => t.trim()).filter(Boolean),
-      body: body.trim(),
+      body: submittedBody.trim(),
       helpfulYes: 0,
       helpfulNo: 0
     };
     const ok = await persistArticles([created, ...articles]);
     if (ok) {
-      setTitle('');
-      setBody('');
+      // Only clear if the user hasn't started typing a newer draft while persistence was pending
+      setTitle(curr => (curr === submittedTitle ? '' : curr));
+      setBody(curr => (curr === submittedBody ? '' : curr));
       setNotice(`Published article ${created.id} under ${created.parentCategory} > ${created.subCategory}.`);
     }
   };
 
   const voteHelpful = (id: string, isYes: boolean) => {
-    const next = articles.map(a =>
-      a.id === id
-        ? { ...a, helpfulYes: a.helpfulYes + (isYes ? 1 : 0), helpfulNo: a.helpfulNo + (isYes ? 0 : 1) }
-        : a
-    );
+    let updatedOne = false;
+    const next = articles.map(a => {
+      if (!updatedOne && a.id === id) {
+        updatedOne = true;
+        return { ...a, helpfulYes: a.helpfulYes + (isYes ? 1 : 0), helpfulNo: a.helpfulNo + (isYes ? 0 : 1) };
+      }
+      return a;
+    });
     void persistArticles(next);
   };
 
@@ -198,33 +235,14 @@ export const KnowledgeBaseBuilder: React.FC<KnowledgeBaseBuilderProps> = ({
         {errorMsg && <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{errorMsg}</div>}
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <input
-            type="search"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Search by ID (KB-101), category, synonym, or topic..."
-            className="bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
-          />
-          <select
-            aria-label="Parent Category Filter"
-            value={selectedParentCat}
-            onChange={e => {
-              setSelectedParentCat(e.target.value);
-              setSelectedSubCat('ALL');
-            }}
-            className="bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
-          >
+          <input aria-label="Search Knowledge Base" type="search" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search by ID (KB-101), category, synonym, or topic..." className="bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+          <select aria-label="Parent Category Filter" value={selectedParentCat} onChange={e => { setSelectedParentCat(e.target.value); setSelectedSubCat('ALL'); }} className="bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-white">
             <option value="ALL">All Parent Categories</option>
             {parentCategories.map(c => (
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
-          <select
-            aria-label="Sub-Category Filter"
-            value={selectedSubCat}
-            onChange={e => setSelectedSubCat(e.target.value)}
-            className="bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
-          >
+          <select aria-label="Sub-Category Filter" value={selectedSubCat} onChange={e => setSelectedSubCat(e.target.value)} className="bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-white">
             <option value="ALL">All Sub-Categories</option>
             {subCategories.map(s => (
               <option key={s} value={s}>{s}</option>
@@ -234,12 +252,12 @@ export const KnowledgeBaseBuilder: React.FC<KnowledgeBaseBuilderProps> = ({
 
         <form onSubmit={handleCreateArticle} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Article Title" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
-            <input value={parentCategory} onChange={e => setParentCategory(e.target.value)} placeholder="Parent Category" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
-            <input value={subCategory} onChange={e => setSubCategory(e.target.value)} placeholder="Child Sub-Category" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
-            <input value={tagsInput} onChange={e => setTagsInput(e.target.value)} placeholder="Comma-separated tags" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+            <input aria-label="Article Title" value={title} onChange={e => setTitle(e.target.value)} placeholder="Article Title" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+            <input aria-label="Parent Category" value={parentCategory} onChange={e => setParentCategory(e.target.value)} placeholder="Parent Category" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+            <input aria-label="Child Sub-Category" value={subCategory} onChange={e => setSubCategory(e.target.value)} placeholder="Child Sub-Category" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
+            <input aria-label="Article Tags" value={tagsInput} onChange={e => setTagsInput(e.target.value)} placeholder="Comma-separated tags" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
           </div>
-          <textarea rows={3} value={body} onChange={e => setBody(e.target.value)} placeholder="Article markdown/body..." className="w-full bg-zinc-950 border border-zinc-800 rounded p-3 text-sm text-white" />
+          <textarea aria-label="Article Body" rows={3} value={body} onChange={e => setBody(e.target.value)} placeholder="Article markdown/body..." className="w-full bg-zinc-950 border border-zinc-800 rounded p-3 text-sm text-white" />
           <button type="submit" className="bg-[#D4AF37] text-black font-bold text-xs px-4 py-2 rounded">+ Publish KB Article</button>
         </form>
 
