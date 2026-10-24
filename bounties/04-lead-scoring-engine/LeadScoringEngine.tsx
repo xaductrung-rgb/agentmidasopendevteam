@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+'use client';
+import React, { useState, useMemo, useRef } from 'react';
 
 export interface ScoringRule {
   id: string;
@@ -55,13 +56,6 @@ const DEFAULT_CONFIG: LeadScoringConfig = {
       email: 'mvance@cloudscale.dev',
       company: 'CloudScale Systems',
       activeSignals: ['pricing_visited', 'enterprise_size', 'webhook_docs']
-    },
-    {
-      id: 'ld-3',
-      name: 'Devon Brooks',
-      email: 'devon@indieagency.co',
-      company: 'Indie Agency',
-      activeSignals: ['webhook_docs', 'inactive_30d']
     }
   ]
 };
@@ -88,22 +82,27 @@ export const LeadScoringEngine: React.FC<LeadScoringEngineProps> = ({
   const [tierFilter, setTierFilter] = useState<'ALL' | 'SQL' | 'MQL' | 'Nurture'>('ALL');
   const [notice, setNotice] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const saveSeqRef = useRef(0);
 
   const persistConfig = async (next: LeadScoringConfig, msg?: string) => {
+    const seq = ++saveSeqRef.current;
     const prev = config;
     setConfig(next);
     setErrorMsg('');
     try {
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
       if (onChange) {
         await onChange(next);
       }
+      if (seq !== saveSeqRef.current) return;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
       if (msg) setNotice(msg);
     } catch {
-      setConfig(prev);
-      setErrorMsg('Failed to save lead scoring configuration; state rolled back.');
+      if (seq === saveSeqRef.current) {
+        setConfig(prev);
+        setErrorMsg('Failed to save lead scoring configuration; state rolled back.');
+      }
     }
   };
 
@@ -113,7 +112,6 @@ export const LeadScoringEngine: React.FC<LeadScoringEngineProps> = ({
       const matchedRules = activeRules.filter(r => lead.activeSignals.includes(r.signalKey));
       const rawScore = matchedRules.reduce((sum, r) => sum + r.weightPoints, 0);
       const clampedScore = Math.max(0, Math.min(100, rawScore));
-      // Logistic conversion probability estimate centered at MQL/SQL midpoint
       const midpoint = (config.mqlThreshold + config.sqlThreshold) / 2;
       const conversionProb = 1 / (1 + Math.exp(-(clampedScore - midpoint) / 12));
       const tier: 'SQL' | 'MQL' | 'Nurture' =
@@ -149,11 +147,11 @@ export const LeadScoringEngine: React.FC<LeadScoringEngineProps> = ({
   };
 
   const updateThresholds = (mql: number, sql: number) => {
-    if (mql >= sql) {
-      setErrorMsg('MQL threshold must be strictly lower than SQL threshold.');
+    if (!Number.isFinite(mql) || !Number.isFinite(sql) || mql < 10 || mql > 90 || sql < 20 || sql > 99 || mql >= sql) {
+      setErrorMsg('Thresholds must be valid numbers (10 ≤ MQL < SQL ≤ 99).');
       return;
     }
-    void persistConfig({ ...config, mqlThreshold: mql, sqlThreshold: sql }, 'Updated MQL/SQL qualification thresholds.');
+    void persistConfig({ ...config, mqlThreshold: Math.round(mql), sqlThreshold: Math.round(sql) }, 'Updated MQL/SQL qualification thresholds.');
   };
 
   const toggleLeadSignal = (leadId: string, signalKey: string) => {
@@ -175,16 +173,16 @@ export const LeadScoringEngine: React.FC<LeadScoringEngineProps> = ({
       return;
     }
     const created: LeadCandidate = {
-      id: `ld-${Date.now()}`,
+      id: `ld-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       name: newLeadName.trim(),
       email: newLeadEmail.trim(),
       company: newLeadCompany.trim() || 'Independent',
-      activeSignals: ['pricing_visited']
+      activeSignals: []
     };
     setNewLeadName('');
     setNewLeadEmail('');
     setNewLeadCompany('');
-    void persistConfig({ ...config, leads: [created, ...config.leads] }, `Added lead ${created.name}.`);
+    void persistConfig({ ...config, leads: [created, ...config.leads] }, `Added lead ${created.name} with 0 initial signals.`);
   };
 
   return (
@@ -225,7 +223,6 @@ export const LeadScoringEngine: React.FC<LeadScoringEngineProps> = ({
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Scoring Rules & Threshold Controls */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-5">
             <div>
               <h2 className="text-base font-bold text-[#D4AF37]">Qualification Thresholds</h2>
@@ -289,7 +286,6 @@ export const LeadScoringEngine: React.FC<LeadScoringEngineProps> = ({
             </div>
           </div>
 
-          {/* Scored Lead Pipeline */}
           <div className="lg:col-span-2 space-y-5">
             <form onSubmit={handleAddLead} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-4 gap-3">
               <input
@@ -371,7 +367,6 @@ export const LeadScoringEngine: React.FC<LeadScoringEngineProps> = ({
                     </div>
                   </div>
 
-                  {/* Interactive Signal Toggles */}
                   <div className="pt-3 border-t border-zinc-800">
                     <div className="text-xs text-zinc-400 mb-2">Observed Behavioral & Firmographic Signals:</div>
                     <div className="flex flex-wrap gap-2">
