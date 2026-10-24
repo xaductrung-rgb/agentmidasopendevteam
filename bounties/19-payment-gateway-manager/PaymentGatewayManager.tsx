@@ -1,455 +1,176 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
-export interface RecordItem {
+export interface PaymentGateway {
   id: string;
-  parentId: string | null;
-  depth: number;
   name: string;
-  category: string;
-  status: 'Active' | 'Pending' | 'Completed' | 'Compressed';
-  primaryMetric: number;
-  sampleSize: number;
-  conversions: number;
-  retryAttempts: number;
-  passupRecipient: string;
-  updatedAt: string;
-  notes: string;
+  priority: number;
+  status: 'Healthy' | 'Degraded' | 'Offline';
+  successRate: number;
+  maxRetries: number;
+  baseBackoffMs: number;
 }
 
-export interface PaymentGatewayManagerProps {
-  initialItems?: RecordItem[];
-  storageKey?: string;
+export interface PaymentTransaction {
+  id: string;
+  amount: number;
+  gatewayUsed: string;
+  attempts: number;
+  backoffDelayMs: number;
+  status: 'Succeeded' | 'Retried & Succeeded' | 'Failed';
+  timestamp: string;
 }
 
-const DEFAULT_ITEMS: RecordItem[] = [
-  {
-    id: 'AM-1901',
-    parentId: null,
-    depth: 0,
-    name: 'Payment Gateway Manager — Root Sponsor / Control Node',
-    category: 'Tier-1 Production',
-    status: 'Active',
-    primaryMetric: 14850,
-    sampleSize: 2400,
-    conversions: 356,
-    retryAttempts: 0,
-    passupRecipient: 'Root Sponsor (Direct 75%)',
-    updatedAt: '2026-10-24 06:15 UTC',
-    notes: 'Multi-gateway payment orchestration with exponential backoff retry logic and failover routing'
-  },
-  {
-    id: 'AM-1902',
-    parentId: 'AM-1901',
-    depth: 1,
-    name: 'Payment Gateway Manager — Sale #1 (Two-Up Passup to Root)',
-    category: 'Automation',
-    status: 'Active',
-    primaryMetric: 8420,
-    sampleSize: 2350,
-    conversions: 452,
-    retryAttempts: 1,
-    passupRecipient: 'AM-1901 (Two-Up Passup #1)',
-    updatedAt: '2026-10-24 06:40 UTC',
-    notes: 'First qualifying sale passed up to upline sponsor under Two-Up rules.'
-  },
-  {
-    id: 'AM-1903',
-    parentId: 'AM-1901',
-    depth: 1,
-    name: 'Payment Gateway Manager — Inactive Node (Dynamic Compression)',
-    category: 'Optimization',
-    status: 'Compressed',
-    primaryMetric: 0,
-    sampleSize: 1800,
-    conversions: 210,
-    retryAttempts: 2,
-    passupRecipient: 'Compressed to AM-1901',
-    updatedAt: '2026-10-24 07:05 UTC',
-    notes: 'Inactive node automatically compressed so child volume rolls up without depth loss.'
-  },
-  {
-    id: 'AM-1904',
-    parentId: 'AM-1903',
-    depth: 2,
-    name: 'Payment Gateway Manager — Sale #3 (Retained Direct 75% Stream)',
-    category: 'Compliance',
-    status: 'Active',
-    primaryMetric: 6190,
-    sampleSize: 1950,
-    conversions: 312,
-    retryAttempts: 0,
-    passupRecipient: 'Retained by Direct Qualifier (Effective Depth 1 after Compression)',
-    updatedAt: '2026-10-24 07:10 UTC',
-    notes: 'Third and subsequent referrals remain permanently on direct sponsor leg.'
-  }
+const DEFAULT_GATEWAYS: PaymentGateway[] = [
+  { id: 'gw-stripe', name: 'Stripe Primary', priority: 1, status: 'Healthy', successRate: 99.4, maxRetries: 3, baseBackoffMs: 500 },
+  { id: 'gw-adyen', name: 'Adyen Global Failover', priority: 2, status: 'Healthy', successRate: 98.9, maxRetries: 3, baseBackoffMs: 750 },
+  { id: 'gw-braintree', name: 'Braintree Backup', priority: 3, status: 'Degraded', successRate: 94.2, maxRetries: 4, baseBackoffMs: 1000 },
 ];
 
-export function PaymentGatewayManager({
-  initialItems = DEFAULT_ITEMS,
-  storageKey = 'agentmidas_bounty_19_v2',
-}: PaymentGatewayManagerProps = {}) {
-  const [items, setItems] = useState<RecordItem[]>(initialItems);
-  const [query, setQuery] = useState<string>('');
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [enableCompression, setEnableCompression] = useState<boolean>(true);
-  const [newName, setNewName] = useState<string>('');
-  const [newParentId, setNewParentId] = useState<string>('AM-1901');
-  const [newCategory, setNewCategory] = useState<string>('Tier-1 Production');
-  const [newPrimary, setNewPrimary] = useState<string>('5000');
-  const [selectedId, setSelectedId] = useState<string>(initialItems[0]?.id ?? 'AM-1901');
+const GW_STORAGE_KEY = 'agentmidas_payment_gateways_v2';
+const TX_STORAGE_KEY = 'agentmidas_payment_txs_v2';
+
+export function PaymentGatewayManager() {
+  const [gateways, setGateways] = useState<PaymentGateway[]>(DEFAULT_GATEWAYS);
+  const [transactions, setTransactions] = useState<PaymentTransaction[]>([]);
+  const [chargeAmount, setChargeAmount] = useState<string>('249.00');
+  const [simulateFailureOnPrimary, setSimulateFailureOnPrimary] = useState<boolean>(false);
 
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(storageKey);
-      if (saved) {
-        const parsed = JSON.parse(saved) as RecordItem[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setItems(parsed);
-          setSelectedId(parsed[0].id);
-        }
-      }
+      const savedGw = window.localStorage.getItem(GW_STORAGE_KEY);
+      if (savedGw) setGateways(JSON.parse(savedGw));
+      const savedTx = window.localStorage.getItem(TX_STORAGE_KEY);
+      if (savedTx) setTransactions(JSON.parse(savedTx));
     } catch {}
-  }, [storageKey]);
+  }, []);
 
-  const persistItems = (next: RecordItem[]) => {
-    setItems(next);
+  const toggleGatewayStatus = (id: string) => {
+    const order: PaymentGateway['status'][] = ['Healthy', 'Degraded', 'Offline'];
+    const next = gateways.map(g =>
+      g.id === id ? { ...g, status: order[(order.indexOf(g.status) + 1) % order.length] } : g
+    );
+    setGateways(next);
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(next));
+      window.localStorage.setItem(GW_STORAGE_KEY, JSON.stringify(next));
     } catch {}
   };
 
-  const filteredItems = useMemo(() => {
-    return items.filter(item => {
-      const matchesStatus = statusFilter === 'ALL' || item.status === statusFilter;
-      const q = query.trim().toLowerCase();
-      const matchesQuery =
-        !q ||
-        item.name.toLowerCase().includes(q) ||
-        item.id.toLowerCase().includes(q) ||
-        item.category.toLowerCase().includes(q);
-      return matchesStatus && matchesQuery;
-    });
-  }, [items, query, statusFilter]);
+  const processChargeWithRetry = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const amount = Math.max(1, Number(chargeAmount) || 100);
+    const activeGateways = [...gateways]
+      .filter(g => g.status !== 'Offline')
+      .sort((a, b) => a.priority - b.priority);
 
-  const summary = useMemo(() => {
-    const activeItems = items.filter(i => i.status === 'Active');
-    const totalVolume = activeItems.reduce((acc, i) => acc + i.primaryMetric, 0);
-    const totalSamples = items.reduce((acc, i) => acc + i.sampleSize, 0);
-    const totalConv = items.reduce((acc, i) => acc + i.conversions, 0);
-    const convRate = totalSamples > 0 ? (totalConv / totalSamples) * 100 : 0;
+    if (activeGateways.length === 0) return;
 
-    // Two-proportion Z-score calculation between first two cohorts
-    const a = items[0];
-    const b = items[1];
-    let zScore = 0;
-    if (a && b && a.sampleSize > 0 && b.sampleSize > 0) {
-      const p1 = a.conversions / a.sampleSize;
-      const p2 = b.conversions / b.sampleSize;
-      const pPool = (a.conversions + b.conversions) / (a.sampleSize + b.sampleSize);
-      const se = Math.sqrt(pPool * (1 - pPool) * (1 / a.sampleSize + 1 / b.sampleSize));
-      zScore = se > 0 ? Math.abs(p2 - p1) / se : 0;
+    const primary = activeGateways[0];
+    const fallback = activeGateways[1] ?? primary;
+
+    let attempts = 1;
+    let chosenGateway = primary.name;
+    let backoffDelayMs = 0;
+    let txStatus: PaymentTransaction['status'] = 'Succeeded';
+
+    if (simulateFailureOnPrimary || primary.status === 'Degraded') {
+      attempts = 2;
+      backoffDelayMs = primary.baseBackoffMs * Math.pow(2, attempts - 1);
+      chosenGateway = `${fallback.name} (Failover from ${primary.name})`;
+      txStatus = 'Retried & Succeeded';
     }
 
-    return {
-      totalVolume,
-      convRate: convRate.toFixed(2),
-      zScore: zScore.toFixed(2),
-      isSignificant: zScore >= 1.96,
-      activeCount: activeItems.length,
+    const tx: PaymentTransaction = {
+      id: `TX-${Date.now().toString().slice(-5)}`,
+      amount,
+      gatewayUsed: chosenGateway,
+      attempts,
+      backoffDelayMs,
+      status: txStatus,
+      timestamp: new Date().toLocaleTimeString(),
     };
-  }, [items]);
-
-  const selectedItem = useMemo(
-    () => items.find(i => i.id === selectedId) ?? items[0],
-    [items, selectedId]
-  );
-
-  function handleCreateRecord(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!newName.trim()) return;
-    const parentNode = items.find(i => i.id === newParentId) ?? null;
-    const siblingCount = items.filter(i => i.parentId === newParentId).length;
-    const isTwoUpPassup = siblingCount < 2 && parentNode !== null;
-
-    const created: RecordItem = {
-      id: `AM-19${String(items.length + 1).padStart(2, '0')}`,
-      parentId: parentNode ? parentNode.id : null,
-      depth: parentNode ? parentNode.depth + 1 : 0,
-      name: newName.trim(),
-      category: newCategory,
-      status: 'Active',
-      primaryMetric: Math.max(0, Number(newPrimary) || 0),
-      sampleSize: 1000,
-      conversions: 165,
-      retryAttempts: 0,
-      passupRecipient: isTwoUpPassup
-        ? `Passed Up to ${parentNode?.parentId ?? parentNode?.id} (Two-Up Sale #${siblingCount + 1})`
-        : `Retained by ${parentNode?.id ?? 'Root'} (Direct 75%)`,
-      updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC',
-      notes: 'Persisted to localStorage with Two-Up passup & dynamic compression evaluation.',
-    };
-    persistItems([created, ...items]);
-    setSelectedId(created.id);
-    setNewName('');
-  }
-
-  function handleCycleStatus(id: string) {
-    const order: RecordItem['status'][] = ['Active', 'Pending', 'Completed', 'Compressed'];
-    persistItems(
-      items.map(item => {
-        if (item.id !== id) return item;
-        const idx = order.indexOf(item.status);
-        const next = order[(idx + 1) % order.length];
-        return { ...item, status: next };
-      })
-    );
-  }
+    const nextTxs = [tx, ...transactions];
+    setTransactions(nextTxs);
+    try {
+      window.localStorage.setItem(TX_STORAGE_KEY, JSON.stringify(nextTxs));
+    } catch {}
+  };
 
   return (
-    <section
-      aria-label="Payment Gateway Manager"
-      className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans"
-    >
-      <div className="max-w-7xl mx-auto space-y-6">
-        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-[#262626] pb-5">
-          <div>
-            <span className="inline-block text-xs uppercase tracking-widest text-[#D4AF37] font-semibold">
-              Agent Midas Bounty #19 • $400
-            </span>
-            <h1 className="text-2xl md:text-3xl font-bold text-[#F5F5F5] mt-1">
-              Payment Gateway Manager
-            </h1>
-            <p className="text-sm text-[#A3A3A3] mt-1">
-              Multi-gateway payment orchestration with exponential backoff retry logic and failover routing
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <label htmlFor="search-input-19" className="sr-only">Search records</label>
-            <input
-              id="search-input-19"
-              type="search"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder="Search ID, name, category..."
-              className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-            />
-            <label htmlFor="status-filter-19" className="sr-only">Filter by status</label>
-            <select
-              id="status-filter-19"
-              value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value)}
-              className="bg-[#0D0D0D] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="Active">Active</option>
-              <option value="Pending">Pending</option>
-              <option value="Completed">Completed</option>
-              <option value="Compressed">Compressed</option>
-            </select>
-            <label htmlFor="compression-toggle-19" className="flex items-center gap-2 text-xs text-[#D4AF37] cursor-pointer">
-              <input
-                id="compression-toggle-19"
-                type="checkbox"
-                checked={enableCompression}
-                onChange={e => setEnableCompression(e.target.checked)}
-                className="accent-[#D4AF37]"
-              />
-              Dynamic Compression
-            </label>
-          </div>
+    <section aria-label="Payment Gateway Manager" className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans">
+      <div className="max-w-6xl mx-auto space-y-6">
+        <header className="border-b border-[#262626] pb-4">
+          <h1 className="text-2xl md:text-3xl font-bold text-[#D4AF37]">Payment Gateway Manager</h1>
+          <p className="text-sm text-[#A3A3A3]">Multi-Gateway Routing, Exponential Backoff Retry & Automatic Failover</p>
         </header>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Active Volume (Persisted)</p>
-            <p className="text-2xl font-bold text-[#D4AF37] mt-1">
-              ${summary.totalVolume.toLocaleString()}
-            </p>
-          </div>
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Active Nodes / Streams</p>
-            <p className="text-2xl font-bold text-[#22C55E] mt-1">
-              {summary.activeCount} / {items.length}
-            </p>
-          </div>
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Aggregate Conversion Rate</p>
-            <p className="text-2xl font-bold text-[#F5F5F5] mt-1">
-              {summary.convRate}%
-            </p>
-          </div>
-          <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4">
-            <p className="text-xs uppercase text-[#A3A3A3]">Z-Score Significance</p>
-            <p className="text-2xl font-bold text-[#3B82F6] mt-1">
-              Z = {summary.zScore} ({summary.isSignificant ? '95%+ Conf.' : 'Collecting'})
-            </p>
-          </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {gateways.map(gw => (
+            <div key={gw.id} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4 space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-mono text-[#D4AF37]">Priority #{gw.priority}</span>
+                <span className="text-xs px-2 py-0.5 rounded bg-[#1F1F1F]">{gw.status}</span>
+              </div>
+              <h2 className="text-lg font-bold">{gw.name}</h2>
+              <p className="text-xs text-[#A3A3A3]">
+                Auth Rate: {gw.successRate}% • Max Retries: {gw.maxRetries} • Base Backoff: {gw.baseBackoffMs}ms
+              </p>
+              <button
+                type="button"
+                onClick={() => toggleGatewayStatus(gw.id)}
+                className="w-full py-1.5 rounded bg-[#1F1F1F] border border-[#D4AF37]/40 text-[#D4AF37] text-xs font-semibold"
+              >
+                Cycle Health State
+              </button>
+            </div>
+          ))}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-4">
-            <h2 className="text-lg font-semibold text-[#D4AF37]">
-              Hierarchical Matrix & Pass-Up Routing ({filteredItems.length})
-            </h2>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-sm">
-                <thead>
-                  <tr className="border-b border-[#262626] text-[#A3A3A3]">
-                    <th className="py-2 pr-3">Node / Depth</th>
-                    <th className="py-2 pr-3">Name & Parent Link</th>
-                    <th className="py-2 pr-3">Pass-Up / Routing</th>
-                    <th className="py-2 pr-3">Volume</th>
-                    <th className="py-2 pr-3">Status</th>
-                    <th className="py-2">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredItems.map(item => {
-                    const effectiveDepth =
-                      enableCompression && item.parentId
-                        ? Math.max(0, item.depth - (items.find(p => p.id === item.parentId)?.status === 'Compressed' ? 1 : 0))
-                        : item.depth;
-                    const rate = item.sampleSize > 0 ? ((item.conversions / item.sampleSize) * 100).toFixed(1) : '0.0';
-                    return (
-                      <tr
-                        key={item.id}
-                        tabIndex={0}
-                        role="button"
-                        aria-pressed={selectedItem?.id === item.id}
-                        onClick={() => setSelectedId(item.id)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            setSelectedId(item.id);
-                          }
-                        }}
-                        className={`border-b border-[#1A1A1A] cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-[#D4AF37] ${
-                          selectedItem?.id === item.id ? 'bg-[#171717]' : 'hover:bg-[#121212]'
-                        }`}
-                      >
-                        <td className="py-3 pr-3 font-mono text-xs text-[#D4AF37]">
-                          <span style={{ paddingLeft: `${effectiveDepth * 12}px` }}>
-                            {effectiveDepth > 0 ? '└─ ' : ''}{item.id} (L{effectiveDepth})
-                          </span>
-                        </td>
-                        <td className="py-3 pr-3">
-                          <p className="font-medium text-[#F5F5F5]">{item.name}</p>
-                          <p className="text-xs text-[#A3A3A3]">
-                            Parent: {item.parentId ?? 'ROOT'} • Conv: {rate}% (Retry #{item.retryAttempts})
-                          </p>
-                        </td>
-                        <td className="py-3 pr-3 text-xs text-[#A3A3A3]">{item.passupRecipient}</td>
-                        <td className="py-3 pr-3 font-mono">${item.primaryMetric.toLocaleString()}</td>
-                        <td className="py-3 pr-3">
-                          <span className="px-2 py-0.5 rounded text-xs font-semibold bg-[#1F1F1F] text-[#D4AF37] border border-[#D4AF37]/40">
-                            {item.status}
-                          </span>
-                        </td>
-                        <td className="py-3">
-                          <button
-                            type="button"
-                            onClick={ev => {
-                              ev.stopPropagation();
-                              handleCycleStatus(item.id);
-                            }}
-                            className="px-2.5 py-1 rounded bg-[#D4AF37] text-[#0A0A0A] font-semibold text-xs hover:bg-[#E8C547]"
-                          >
-                            Cycle Status
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+        <form onSubmit={processChargeWithRetry} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 flex flex-wrap items-end gap-4">
+          <div>
+            <label htmlFor="pg-amount" className="block text-xs text-[#A3A3A3] mb-1">Charge Amount (USD)</label>
+            <input
+              id="pg-amount"
+              type="number"
+              step="0.01"
+              required
+              value={chargeAmount}
+              onChange={e => setChargeAmount(e.target.value)}
+              className="bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]"
+            />
           </div>
+          <label htmlFor="pg-sim-fail" className="flex items-center gap-2 text-xs text-[#A3A3A3] py-2 cursor-pointer">
+            <input
+              id="pg-sim-fail"
+              type="checkbox"
+              checked={simulateFailureOnPrimary}
+              onChange={e => setSimulateFailureOnPrimary(e.target.checked)}
+              className="accent-[#D4AF37]"
+            />
+            Simulate Primary Timeout (Trigger Exponential Backoff + Failover)
+          </label>
+          <button type="submit" className="px-4 py-2 rounded-lg bg-[#D4AF37] text-[#0A0A0A] font-bold text-sm">
+            Execute Charge
+          </button>
+        </form>
 
-          <aside className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 space-y-5">
-            <div>
-              <h2 className="text-lg font-semibold text-[#D4AF37]">Node Inspector & Persistent Creator</h2>
-              {selectedItem && (
-                <div className="mt-3 p-3 rounded-lg bg-[#141414] border border-[#262626] space-y-1.5 text-xs">
-                  <p className="text-[#D4AF37] font-mono font-bold">
-                    {selectedItem.id} (Parent: {selectedItem.parentId ?? 'ROOT'})
-                  </p>
-                  <p className="text-sm font-semibold text-[#F5F5F5]">{selectedItem.name}</p>
-                  <p className="text-[#22C55E]">Routing: {selectedItem.passupRecipient}</p>
-                  <p className="text-[#A3A3A3]">{selectedItem.notes}</p>
-                  <p className="text-[#666666]">Updated: {selectedItem.updatedAt}</p>
+        <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5">
+          <h2 className="text-lg font-semibold text-[#D4AF37] mb-3">Transaction & Retry Audit Log ({transactions.length})</h2>
+          <div className="space-y-2 text-sm">
+            {transactions.map(tx => (
+              <div key={tx.id} className="flex flex-wrap justify-between items-center p-3 rounded bg-[#141414] border border-[#262626]">
+                <div>
+                  <span className="font-mono text-[#D4AF37] mr-2">{tx.id}</span>
+                  <span className="font-semibold">${tx.amount.toFixed(2)}</span>
+                  <span className="text-xs text-[#A3A3A3] ml-2">via {tx.gatewayUsed}</span>
                 </div>
-              )}
-            </div>
-
-            <form onSubmit={handleCreateRecord} className="space-y-3 border-t border-[#262626] pt-4">
-              <h3 className="text-sm font-semibold text-[#F5F5F5]">Add Child Node / Entry</h3>
-              <div>
-                <label htmlFor="entry-name-19" className="block text-xs text-[#A3A3A3] mb-1">
-                  Entry / Node Name
-                </label>
-                <input
-                  id="entry-name-19"
-                  type="text"
-                  required
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  placeholder="Enter node or workflow title..."
-                  className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                />
+                <div className="text-xs text-[#22C55E]">
+                  {tx.status} ({tx.attempts} attempt{tx.attempts > 1 ? 's' : ''}, {tx.backoffDelayMs}ms backoff) • {tx.timestamp}
+                </div>
               </div>
-              <div>
-                <label htmlFor="parent-node-19" className="block text-xs text-[#A3A3A3] mb-1">
-                  Parent Sponsor / Upstream Node
-                </label>
-                <select
-                  id="parent-node-19"
-                  value={newParentId}
-                  onChange={e => setNewParentId(e.target.value)}
-                  className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                >
-                  {items.map(i => (
-                    <option key={i.id} value={i.id}>{i.id} — {i.name.slice(0, 28)}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="entry-cat-19" className="block text-xs text-[#A3A3A3] mb-1">
-                  Category
-                </label>
-                <select
-                  id="entry-cat-19"
-                  value={newCategory}
-                  onChange={e => setNewCategory(e.target.value)}
-                  className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                >
-                  <option value="Tier-1 Production">Tier-1 Production</option>
-                  <option value="Automation">Automation</option>
-                  <option value="Optimization">Optimization</option>
-                  <option value="Compliance">Compliance</option>
-                </select>
-              </div>
-              <div>
-                <label htmlFor="entry-val-19" className="block text-xs text-[#A3A3A3] mb-1">
-                  Projected Value (USD)
-                </label>
-                <input
-                  id="entry-val-19"
-                  type="number"
-                  value={newPrimary}
-                  onChange={e => setNewPrimary(e.target.value)}
-                  className="w-full bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                />
-              </div>
-              <button
-                type="submit"
-                className="w-full py-2.5 rounded-lg bg-[#D4AF37] text-[#0A0A0A] font-bold text-sm hover:bg-[#E8C547]"
-              >
-                + Launch & Persist Entry
-              </button>
-            </form>
-          </aside>
+            ))}
+          </div>
         </div>
       </div>
     </section>
