@@ -1,270 +1,389 @@
-'use client';
-
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useState, useMemo } from 'react';
 
 export interface MenuItem {
   id: string;
   name: string;
-  category: 'Starters' | 'Mains' | 'Beverages';
+  category: 'Starters' | 'Mains' | 'Drinks' | 'Desserts';
   price: number;
+  available: boolean;
 }
 
 export interface OrderLine {
-  item: MenuItem;
-  qty: number;
+  itemId: string;
+  name: string;
+  unitPrice: number;
+  quantity: number;
 }
 
-export interface SettledKitchenOrder {
-  orderId: string;
-  tableNumber: number;
-  itemsCount: number;
+export interface SettledOrder {
+  id: string;
+  tableNumber: string;
+  lines: OrderLine[];
+  subtotal: number;
+  tax: number;
   total: number;
-  firedAt: string;
+  settledAtIso: string;
 }
+
+export interface RestaurantPOSProps {
+  storageKey?: string;
+  initialMenu?: MenuItem[];
+  onChange?: (state: { menu: MenuItem[]; orders: SettledOrder[] }) => void | Promise<void>;
+}
+
+const roundCents = (val: number) => Math.round(val * 100) / 100;
+const TAX_RATE = 0.085;
 
 const DEFAULT_MENU: MenuItem[] = [
-  { id: 'm1', name: 'Wagyu Truffle Sliders', category: 'Starters', price: 24 },
-  { id: 'm2', name: 'Crispy Calamari', category: 'Starters', price: 18 },
-  { id: 'm3', name: 'Dry-Aged Ribeye (14oz)', category: 'Mains', price: 64 },
-  { id: 'm4', name: 'Pan-Seared Chilean Sea Bass', category: 'Mains', price: 48 },
-  { id: 'm5', name: 'Smoked Old Fashioned', category: 'Beverages', price: 19 },
+  { id: 'm-1', name: 'Wagyu Truffle Sliders', category: 'Starters', price: 18.5, available: true },
+  { id: 'm-2', name: 'Pan-Seared Sea Bass', category: 'Mains', price: 34.0, available: true },
+  { id: 'm-3', name: 'Dry-Aged Ribeye (14oz)', category: 'Mains', price: 52.0, available: true },
+  { id: 'm-4', name: 'Smoked Old Fashioned', category: 'Drinks', price: 16.0, available: true },
+  { id: 'm-5', name: 'Gold-Leaf Espresso Tart', category: 'Desserts', price: 14.5, available: true }
 ];
 
-const MENU_STORAGE_KEY = 'agentmidas_pos_menu_v2';
-const ORDERS_STORAGE_KEY = 'agentmidas_pos_orders_v2';
+export const RestaurantPOSInterface: React.FC<RestaurantPOSProps> = ({
+  storageKey = 'agentmidas_restaurant_pos_v2',
+  initialMenu = DEFAULT_MENU,
+  onChange
+}) => {
+  const [menu, setMenu] = useState<MenuItem[]>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && Array.isArray(parsed.menu) && parsed.menu.length > 0) return parsed.menu;
+      }
+    } catch {}
+    return initialMenu;
+  });
 
-export function RestaurantPOSInterface() {
-  const [menu, setMenu] = useState<MenuItem[]>(DEFAULT_MENU);
-  const [activeCategory, setActiveCategory] = useState<string>('ALL');
-  const [tableNumber, setTableNumber] = useState<number>(12);
-  const [ticket, setTicket] = useState<OrderLine[]>([]);
-  const [settledOrders, setSettledOrders] = useState<SettledKitchenOrder[]>([]);
+  const [settledOrders, setSettledOrders] = useState<SettledOrder[]>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && Array.isArray(parsed.orders)) return parsed.orders;
+      }
+    } catch {}
+    return [];
+  });
+
+  const [categoryFilter, setCategoryFilter] = useState<'ALL' | MenuItem['category']>('ALL');
+  const [tableNumber, setTableNumber] = useState('Table 4');
+  const [cart, setCart] = useState<OrderLine[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [formName, setFormName] = useState<string>('');
-  const [formCategory, setFormCategory] = useState<MenuItem['category']>('Mains');
-  const [formPrice, setFormPrice] = useState<string>('32');
+  const [itemName, setItemName] = useState('');
+  const [itemPrice, setItemPrice] = useState('');
+  const [itemCategory, setItemCategory] = useState<MenuItem['category']>('Mains');
+  const [errorMsg, setErrorMsg] = useState('');
 
-  useEffect(() => {
+  const persistPosState = async (nextMenu: MenuItem[], nextOrders: SettledOrder[]) => {
+    const prevMenu = menu;
+    const prevOrders = settledOrders;
+    setMenu(nextMenu);
+    setSettledOrders(nextOrders);
+    setErrorMsg('');
     try {
-      const savedMenu = window.localStorage.getItem(MENU_STORAGE_KEY);
-      if (savedMenu) {
-        const parsed = JSON.parse(savedMenu) as MenuItem[];
-        if (Array.isArray(parsed) && parsed.length > 0) setMenu(parsed);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify({ menu: nextMenu, orders: nextOrders }));
       }
-      const savedOrders = window.localStorage.getItem(ORDERS_STORAGE_KEY);
-      if (savedOrders) {
-        const parsedOrders = JSON.parse(savedOrders) as SettledKitchenOrder[];
-        if (Array.isArray(parsedOrders)) setSettledOrders(parsedOrders);
+      if (onChange) {
+        await onChange({ menu: nextMenu, orders: nextOrders });
       }
-    } catch {}
-  }, []);
-
-  const persistMenu = (next: MenuItem[]) => {
-    setMenu(next);
-    try {
-      window.localStorage.setItem(MENU_STORAGE_KEY, JSON.stringify(next));
-    } catch {}
+    } catch {
+      setMenu(prevMenu);
+      setSettledOrders(prevOrders);
+      setErrorMsg('Failed to save POS state; rolled back.');
+    }
   };
 
-  const addItemToTicket = (item: MenuItem) => {
-    setTicket(prev => {
-      const existing = prev.find(l => l.item.id === item.id);
+  const filteredMenu = useMemo(
+    () => menu.filter(m => (categoryFilter === 'ALL' ? true : m.category === categoryFilter)),
+    [menu, categoryFilter]
+  );
+
+  const ticketTotals = useMemo(() => {
+    const rawSubtotal = cart.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0);
+    const subtotal = roundCents(rawSubtotal);
+    const tax = roundCents(subtotal * TAX_RATE);
+    const total = roundCents(subtotal + tax);
+    return { subtotal, tax, total };
+  }, [cart]);
+
+  const addToTicket = (item: MenuItem) => {
+    if (!item.available) return;
+    setCart(curr => {
+      const existing = curr.find(l => l.itemId === item.id);
       if (existing) {
-        return prev.map(l => (l.item.id === item.id ? { ...l, qty: l.qty + 1 } : l));
+        return curr.map(l => (l.itemId === item.id ? { ...l, quantity: l.quantity + 1 } : l));
       }
-      return [...prev, { item, qty: 1 }];
+      return [...curr, { itemId: item.id, name: item.name, unitPrice: roundCents(item.price), quantity: 1 }];
     });
+  };
+
+  const adjustQty = (itemId: string, delta: number) => {
+    setCart(curr =>
+      curr
+        .map(l => (l.itemId === itemId ? { ...l, quantity: l.quantity + delta } : l))
+        .filter(l => l.quantity > 0)
+    );
+  };
+
+  const handleSaveMenuItem = (e: React.FormEvent) => {
+    e.preventDefault();
+    const parsedPrice = roundCents(Number(itemPrice));
+    if (!itemName.trim() || Number.isNaN(parsedPrice) || parsedPrice <= 0) {
+      setErrorMsg('Valid menu item name and positive price are required.');
+      return;
+    }
+    let nextMenu: MenuItem[];
+    if (editingId) {
+      nextMenu = menu.map(m =>
+        m.id === editingId ? { ...m, name: itemName.trim(), price: parsedPrice, category: itemCategory } : m
+      );
+      setEditingId(null);
+    } else {
+      nextMenu = [
+        ...menu,
+        { id: `m-${Date.now()}`, name: itemName.trim(), category: itemCategory, price: parsedPrice, available: true }
+      ];
+    }
+    setItemName('');
+    setItemPrice('');
+    void persistPosState(nextMenu, settledOrders);
   };
 
   const startEditItem = (item: MenuItem) => {
     setEditingId(item.id);
-    setFormName(item.name);
-    setFormCategory(item.category);
-    setFormPrice(String(item.price));
+    setItemName(item.name);
+    setItemPrice(String(item.price));
+    setItemCategory(item.category);
   };
 
-  const handleSaveMenuItem = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!formName.trim()) return;
-    const numericPrice = Math.max(1, Number(formPrice) || 10);
-
-    if (editingId) {
-      const nextMenu = menu.map(m =>
-        m.id === editingId ? { ...m, name: formName.trim(), category: formCategory, price: numericPrice } : m
-      );
-      persistMenu(nextMenu);
-      setTicket(prev =>
-        prev.map(l =>
-          l.item.id === editingId
-            ? { ...l, item: { ...l.item, name: formName.trim(), category: formCategory, price: numericPrice } }
-            : l
-        )
-      );
-      setEditingId(null);
-    } else {
-      const created: MenuItem = {
-        id: `m-${Date.now().toString().slice(-4)}`,
-        name: formName.trim(),
-        category: formCategory,
-        price: numericPrice,
-      };
-      persistMenu([...menu, created]);
-    }
-    setFormName('');
-    setFormPrice('32');
+  const deleteMenuItem = (id: string) => {
+    void persistPosState(menu.filter(m => m.id !== id), settledOrders);
   };
 
-  const removeMenuItem = (id: string) => {
-    persistMenu(menu.filter(m => m.id !== id));
-    if (editingId === id) setEditingId(null);
-  };
-
-  const orderSummary = useMemo(() => {
-    const subtotal = ticket.reduce((sum, l) => sum + l.item.price * l.qty, 0);
-    const tax = subtotal * 0.08875;
-    const total = subtotal + tax;
-    return { subtotal, tax, total };
-  }, [ticket]);
-
-  const fireAndSettleOrder = () => {
-    if (ticket.length === 0) return;
-    const record: SettledKitchenOrder = {
-      orderId: `KDS-${Date.now().toString().slice(-4)}`,
+  const settleTicket = () => {
+    if (cart.length === 0) return;
+    const order: SettledOrder = {
+      id: `ORD-${1001 + settledOrders.length}`,
       tableNumber,
-      itemsCount: ticket.reduce((s, l) => s + l.qty, 0),
-      total: orderSummary.total,
-      firedAt: new Date().toLocaleTimeString(),
+      lines: cart,
+      subtotal: ticketTotals.subtotal,
+      tax: ticketTotals.tax,
+      total: ticketTotals.total,
+      settledAtIso: new Date().toISOString().slice(11, 19) + ' UTC'
     };
-    const nextOrders = [record, ...settledOrders];
-    setSettledOrders(nextOrders);
-    try {
-      window.localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(nextOrders));
-    } catch {}
-    setTicket([]);
+    setCart([]);
+    void persistPosState(menu, [order, ...settledOrders]);
   };
-
-  const visibleMenu = useMemo(
-    () => menu.filter(m => activeCategory === 'ALL' || m.category === activeCategory),
-    [menu, activeCategory]
-  );
 
   return (
-    <section aria-label="Restaurant POS Interface" className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans">
-      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-4">
-          <header className="flex flex-wrap items-center justify-between gap-2 border-b border-[#262626] pb-4">
-            <h1 className="text-2xl font-bold text-[#D4AF37]">Midas Hospitality POS</h1>
-            <div className="flex gap-2">
-              {['ALL', 'Starters', 'Mains', 'Beverages'].map(cat => (
+    <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
+      <div className="max-w-7xl mx-auto space-y-6">
+        <header className="flex justify-between items-center border-b border-zinc-800 pb-4">
+          <div>
+            <h1 className="text-2xl font-bold text-[#D4AF37]">Restaurant POS & Kitchen Dispatch Terminal</h1>
+            <p className="text-sm text-zinc-400">Menu CRUD editing, itemized tax calculation, and settled kitchen order log</p>
+          </div>
+          <select
+            aria-label="Select Active Table"
+            value={tableNumber}
+            onChange={e => setTableNumber(e.target.value)}
+            className="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-[#D4AF37] font-bold"
+          >
+            {['Table 1', 'Table 2', 'Table 4', 'Table 8 (VIP)', 'Bar Counter'].map(t => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </header>
+
+        {errorMsg && (
+          <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">
+            {errorMsg}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Menu Grid + Inline Editor */}
+          <div className="lg:col-span-2 space-y-4">
+            <form onSubmit={handleSaveMenuItem} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap gap-2">
+              <input
+                type="text"
+                placeholder="Menu Item Name"
+                value={itemName}
+                onChange={e => setItemName(e.target.value)}
+                className="flex-1 min-w-[160px] bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
+              />
+              <input
+                type="number"
+                step="0.01"
+                placeholder="Price ($)"
+                value={itemPrice}
+                onChange={e => setItemPrice(e.target.value)}
+                className="w-28 bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
+              />
+              <select
+                value={itemCategory}
+                onChange={e => setItemCategory(e.target.value as MenuItem['category'])}
+                className="bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-sm text-white"
+              >
+                {(['Starters', 'Mains', 'Drinks', 'Desserts'] as const).map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <button type="submit" className="bg-[#D4AF37] text-black font-bold text-xs px-4 py-1.5 rounded">
+                {editingId ? 'Save Item Edit' : '+ Add Menu Item'}
+              </button>
+              {editingId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingId(null);
+                    setItemName('');
+                    setItemPrice('');
+                  }}
+                  className="bg-zinc-800 text-zinc-300 text-xs px-3 py-1.5 rounded"
+                >
+                  Cancel
+                </button>
+              )}
+            </form>
+
+            <div className="flex gap-2" role="tablist">
+              {(['ALL', 'Starters', 'Mains', 'Drinks', 'Desserts'] as const).map(cat => (
                 <button
                   key={cat}
                   type="button"
-                  onClick={() => setActiveCategory(cat)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
-                    activeCategory === cat ? 'bg-[#D4AF37] text-[#0A0A0A]' : 'bg-[#0D0D0D] text-[#A3A3A3] border border-[#262626]'
+                  role="tab"
+                  aria-selected={categoryFilter === cat}
+                  onClick={() => setCategoryFilter(cat)}
+                  className={`px-3 py-1 rounded text-xs font-bold ${
+                    categoryFilter === cat ? 'bg-[#D4AF37] text-black' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'
                   }`}
                 >
                   {cat}
                 </button>
               ))}
             </div>
-          </header>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {visibleMenu.map(item => (
-              <div key={item.id} className="flex items-center justify-between p-4 rounded-xl bg-[#0D0D0D] border border-[#262626]">
-                <button type="button" onClick={() => addItemToTicket(item)} className="text-left flex-1">
-                  <p className="font-semibold text-[#F5F5F5]">{item.name}</p>
-                  <p className="text-xs text-[#A3A3A3]">{item.category} • <span className="text-[#D4AF37] font-mono">${item.price}</span></p>
-                </button>
-                <div className="flex gap-2 ml-2">
-                  <button
-                    type="button"
-                    onClick={() => startEditItem(item)}
-                    className="text-xs text-[#D4AF37] hover:underline"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => removeMenuItem(item.id)}
-                    className="text-xs text-[#EF4444] hover:underline"
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <form onSubmit={handleSaveMenuItem} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4 grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
-            <div>
-              <label htmlFor="pos-item-name" className="block text-xs text-[#A3A3A3] mb-1">
-                {editingId ? 'Edit Dish Name' : 'New Dish Name'}
-              </label>
-              <input id="pos-item-name" type="text" required value={formName} onChange={e => setFormName(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-1.5 text-sm" />
-            </div>
-            <div>
-              <label htmlFor="pos-item-cat" className="block text-xs text-[#A3A3A3] mb-1">Category</label>
-              <select id="pos-item-cat" value={formCategory} onChange={e => setFormCategory(e.target.value as MenuItem['category'])} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-1.5 text-sm">
-                <option value="Starters">Starters</option>
-                <option value="Mains">Mains</option>
-                <option value="Beverages">Beverages</option>
-              </select>
-            </div>
-            <div>
-              <label htmlFor="pos-item-price" className="block text-xs text-[#A3A3A3] mb-1">Price ($)</label>
-              <input id="pos-item-price" type="number" value={formPrice} onChange={e => setFormPrice(e.target.value)} className="w-full bg-[#0A0A0A] border border-[#262626] rounded px-3 py-1.5 text-sm" />
-            </div>
-            <button type="submit" className="py-2 rounded bg-[#D4AF37] text-[#0A0A0A] font-bold text-xs">
-              {editingId ? 'Save Changes' : '+ Add Dish'}
-            </button>
-          </form>
-        </div>
-
-        <aside className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 flex flex-col justify-between space-y-4">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-[#262626] pb-3">
-              <h2 className="text-lg font-semibold text-[#D4AF37]">Table #{tableNumber} Ticket</h2>
-              <label htmlFor="pos-table-num" className="sr-only">Table Number</label>
-              <input
-                id="pos-table-num"
-                type="number"
-                min={1}
-                max={99}
-                value={tableNumber}
-                onChange={e => setTableNumber(Number(e.target.value) || 1)}
-                className="w-16 bg-[#0A0A0A] border border-[#262626] rounded px-2 py-1 text-sm text-center"
-              />
-            </div>
-            <div className="space-y-2">
-              {ticket.map(line => (
-                <div key={line.item.id} className="flex items-center justify-between text-sm">
-                  <span>{line.qty}x {line.item.name}</span>
-                  <span className="font-mono">${(line.item.price * line.qty).toFixed(2)}</span>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {filteredMenu.map(item => (
+                <div key={item.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex justify-between items-center">
+                  <div>
+                    <div className="text-xs text-[#D4AF37]">{item.category}</div>
+                    <div className="font-bold text-white">{item.name}</div>
+                    <div className="text-sm font-mono text-zinc-300">${item.price.toFixed(2)}</div>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => addToTicket(item)}
+                      className="px-3 py-1.5 rounded bg-[#D4AF37] text-black font-bold text-xs"
+                    >
+                      + Order
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startEditItem(item)}
+                      className="px-2.5 py-1.5 rounded bg-zinc-800 text-zinc-200 text-xs"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteMenuItem(item.id)}
+                      className="px-2.5 py-1.5 rounded bg-red-950 text-red-300 text-xs"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="border-t border-[#262626] pt-4 space-y-2 text-sm">
-            <div className="flex justify-between text-lg font-bold text-[#D4AF37]">
-              <span>Total (incl. Tax)</span>
-              <span className="font-mono">${orderSummary.total.toFixed(2)}</span>
+          {/* Active Ticket & Recent Settled Kitchen Dispatches */}
+          <div className="space-y-6">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+              <h2 className="text-lg font-bold text-[#D4AF37]">Active Ticket — {tableNumber}</h2>
+              {cart.length === 0 ? (
+                <p className="text-xs text-zinc-500">Tap menu items to add to {tableNumber}.</p>
+              ) : (
+                <div className="space-y-2">
+                  {cart.map(line => (
+                    <div key={line.itemId} className="flex justify-between items-center text-sm bg-zinc-950 p-2.5 rounded">
+                      <div>
+                        <div className="font-semibold text-white">{line.name}</div>
+                        <div className="text-xs text-zinc-400">${line.unitPrice.toFixed(2)} each</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={() => adjustQty(line.itemId, -1)} className="px-2 py-0.5 bg-zinc-800 rounded">-</button>
+                        <span className="font-mono font-bold">{line.quantity}</span>
+                        <button type="button" onClick={() => adjustQty(line.itemId, 1)} className="px-2 py-0.5 bg-zinc-800 rounded">+</button>
+                        <span className="font-mono text-[#D4AF37] w-16 text-right">
+                          ${roundCents(line.unitPrice * line.quantity).toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="border-t border-zinc-800 pt-3 space-y-1 text-sm">
+                <div className="flex justify-between text-zinc-400">
+                  <span>Subtotal</span>
+                  <span className="font-mono">${ticketTotals.subtotal.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-zinc-400">
+                  <span>Sales Tax (8.5%)</span>
+                  <span className="font-mono">${ticketTotals.tax.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-base font-bold text-[#D4AF37] pt-1 border-t border-zinc-800">
+                  <span>Total Due</span>
+                  <span className="font-mono">${ticketTotals.total.toFixed(2)}</span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                disabled={cart.length === 0}
+                onClick={settleTicket}
+                className="w-full py-2.5 rounded-lg bg-[#D4AF37] text-black font-bold text-sm disabled:opacity-40"
+              >
+                Dispatch to Kitchen & Settle (${ticketTotals.total.toFixed(2)})
+              </button>
             </div>
-            <button
-              type="button"
-              disabled={ticket.length === 0}
-              onClick={fireAndSettleOrder}
-              className="w-full mt-2 py-3 rounded-lg bg-[#D4AF37] text-[#0A0A0A] font-bold text-sm hover:bg-[#E8C547] disabled:opacity-40"
-            >
-              Fire to Kitchen & Settle (${orderSummary.total.toFixed(2)})
-            </button>
+
+            {/* Settled Kitchen Dispatches */}
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
+              <h3 className="text-sm font-bold text-[#D4AF37]">Recent Kitchen Dispatches ({settledOrders.length})</h3>
+              {settledOrders.length === 0 ? (
+                <p className="text-xs text-zinc-500">No settled orders dispatched yet.</p>
+              ) : (
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {settledOrders.map(ord => (
+                    <div key={ord.id} className="bg-zinc-950 border border-zinc-800 rounded p-3 text-xs space-y-1">
+                      <div className="flex justify-between font-bold text-[#D4AF37]">
+                        <span>{ord.id} · {ord.tableNumber}</span>
+                        <span>{ord.settledAtIso}</span>
+                      </div>
+                      <div className="text-zinc-400">
+                        Subtotal: ${ord.subtotal.toFixed(2)} · Tax: ${ord.tax.toFixed(2)} ·{' '}
+                        <strong className="text-emerald-400">Total: ${ord.total.toFixed(2)}</strong>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        </aside>
+        </div>
       </div>
-    </section>
+    </div>
   );
-}
+};
 
 export default RestaurantPOSInterface;
