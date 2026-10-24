@@ -1,180 +1,292 @@
-'use client';
+import React, { useState, useEffect } from 'react';
 
-import React, { useEffect, useState } from 'react';
-
-export interface PaymentGateway {
+export interface GatewayNode {
   id: string;
   name: string;
   priority: number;
-  status: 'Healthy' | 'Degraded' | 'Offline';
-  successRate: number;
-  maxRetries: number;
-  baseBackoffMs: number;
+  healthy: boolean;
+  feePct: number;
 }
 
-export interface PaymentTransaction {
+export interface GatewayTransaction {
   id: string;
+  customerEmail: string;
   amount: number;
-  gatewayUsed: string;
+  routedGateway: string;
   attempts: number;
-  backoffDelayMs: number;
-  status: 'Succeeded' | 'Retried & Succeeded' | 'Failed';
-  timestamp: string;
+  mode: 'live_gateway' | 'sandbox_simulation';
+  status: 'succeeded' | 'simulated' | 'failed';
+  createdAtIso: string;
 }
 
-const DEFAULT_GATEWAYS: PaymentGateway[] = [
-  { id: 'gw-stripe', name: 'Stripe Primary', priority: 1, status: 'Healthy', successRate: 99.4, maxRetries: 3, baseBackoffMs: 500 },
-  { id: 'gw-adyen', name: 'Adyen Global Failover', priority: 2, status: 'Healthy', successRate: 98.9, maxRetries: 3, baseBackoffMs: 750 },
-  { id: 'gw-braintree', name: 'Braintree Backup', priority: 3, status: 'Degraded', successRate: 94.2, maxRetries: 4, baseBackoffMs: 1000 },
+export interface PaymentGatewayManagerProps {
+  storageKey?: string;
+  gatewayEndpoint?: string;
+  onExecutePayment?: (payload: {
+    gatewayId: string;
+    customerEmail: string;
+    amount: number;
+  }) => Promise<{ status: 'succeeded' | 'failed'; transactionId?: string }>;
+  onChange?: (txs: GatewayTransaction[]) => void | Promise<void>;
+}
+
+const DEFAULT_GATEWAYS: GatewayNode[] = [
+  { id: 'gw-stripe', name: 'Stripe Primary', priority: 1, healthy: true, feePct: 2.9 },
+  { id: 'gw-adyen', name: 'Adyen Fallback', priority: 2, healthy: true, feePct: 2.7 },
+  { id: 'gw-braintree', name: 'Braintree Backup', priority: 3, healthy: true, feePct: 3.1 }
 ];
 
-const GW_STORAGE_KEY = 'agentmidas_payment_gateways_v2';
-const TX_STORAGE_KEY = 'agentmidas_payment_txs_v2';
+export const PaymentGatewayManager: React.FC<PaymentGatewayManagerProps> = ({
+  storageKey = 'agentmidas_gateway_txs_v2',
+  gatewayEndpoint,
+  onExecutePayment,
+  onChange
+}) => {
+  const [gateways, setGateways] = useState<GatewayNode[]>(DEFAULT_GATEWAYS);
+  const [transactions, setTransactions] = useState<GatewayTransaction[]>(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
 
-export function PaymentGatewayManager() {
-  const [gateways, setGateways] = useState<PaymentGateway[]>(DEFAULT_GATEWAYS);
-  const [transactions, setTransactions] = useState<PaymentTransaction[]>([]);
-  const [chargeAmount, setChargeAmount] = useState<string>('249.00');
-  const [simulateFailureOnPrimary, setSimulateFailureOnPrimary] = useState<boolean>(false);
+  const [customerEmail, setCustomerEmail] = useState('billing@enterprise.io');
+  const [amount, setAmount] = useState('450.00');
+  const [statusNotice, setStatusNotice] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
 
+  // Cross-tab synchronization to prevent overwriting concurrent tab audit records
   useEffect(() => {
-    try {
-      const savedGw = window.localStorage.getItem(GW_STORAGE_KEY);
-      if (savedGw) setGateways(JSON.parse(savedGw));
-      const savedTx = window.localStorage.getItem(TX_STORAGE_KEY);
-      if (savedTx) setTransactions(JSON.parse(savedTx));
-    } catch {}
-  }, []);
+    if (typeof window === 'undefined') return;
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === storageKey && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) setTransactions(parsed);
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [storageKey]);
 
-  const toggleGatewayStatus = (id: string) => {
-    const order: PaymentGateway['status'][] = ['Healthy', 'Degraded', 'Offline'];
-    const next = gateways.map(g =>
-      g.id === id ? { ...g, status: order[(order.indexOf(g.status) + 1) % order.length] } : g
-    );
-    setGateways(next);
+  const appendTransactionAtomically = async (tx: GatewayTransaction) => {
+    let latestList = transactions;
     try {
-      window.localStorage.setItem(GW_STORAGE_KEY, JSON.stringify(next));
+      if (typeof window !== 'undefined') {
+        const diskRaw = window.localStorage.getItem(storageKey);
+        if (diskRaw) {
+          const diskParsed = JSON.parse(diskRaw);
+          if (Array.isArray(diskParsed)) {
+            const seen = new Set(diskParsed.map((item: GatewayTransaction) => item.id));
+            latestList = [...diskParsed, ...transactions.filter(t => !seen.has(t.id))];
+          }
+        }
+      }
     } catch {}
+
+    const merged = [tx, ...latestList.filter(item => item.id !== tx.id)];
+    setTransactions(merged);
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(merged));
+      }
+      if (onChange) {
+        await onChange(merged);
+      }
+    } catch {
+      setErrorMsg('Failed to persist transaction log to storage.');
+    }
   };
 
-  const processChargeWithRetry = (e: React.FormEvent<HTMLFormElement>) => {
+  const toggleGatewayHealth = (id: string) => {
+    setGateways(curr => curr.map(g => (g.id === id ? { ...g, healthy: !g.healthy } : g)));
+  };
+
+  const handleRoutePayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = Math.max(1, Number(chargeAmount) || 100);
-    const activeGateways = [...gateways]
-      .filter(g => g.status !== 'Offline')
-      .sort((a, b) => a.priority - b.priority);
-
-    if (activeGateways.length === 0) return;
-
-    const primary = activeGateways[0];
-    const fallback = activeGateways[1] ?? primary;
-
-    let attempts = 1;
-    let chosenGateway = primary.name;
-    let backoffDelayMs = 0;
-    let txStatus: PaymentTransaction['status'] = 'Succeeded';
-
-    if (simulateFailureOnPrimary || primary.status === 'Degraded') {
-      attempts = 2;
-      backoffDelayMs = primary.baseBackoffMs * Math.pow(2, attempts - 1);
-      chosenGateway = `${fallback.name} (Failover from ${primary.name})`;
-      txStatus = 'Retried & Succeeded';
+    setErrorMsg('');
+    setStatusNotice('');
+    const parsedAmount = Math.round(Number(amount) * 100) / 100;
+    if (!customerEmail.trim() || Number.isNaN(parsedAmount) || parsedAmount <= 0) {
+      setErrorMsg('Valid customer email and positive amount are required.');
+      return;
     }
 
-    const tx: PaymentTransaction = {
-      id: `TX-${Date.now().toString().slice(-5)}`,
-      amount,
-      gatewayUsed: chosenGateway,
-      attempts,
-      backoffDelayMs,
-      status: txStatus,
-      timestamp: new Date().toLocaleTimeString(),
-    };
-    const nextTxs = [tx, ...transactions];
-    setTransactions(nextTxs);
-    try {
-      window.localStorage.setItem(TX_STORAGE_KEY, JSON.stringify(nextTxs));
-    } catch {}
+    const ordered = [...gateways].sort((a, b) => a.priority - b.priority);
+    const healthyCandidates = ordered.filter(g => g.healthy);
+    if (healthyCandidates.length === 0) {
+      setErrorMsg('All payment gateways are currently unhealthy; failover exhausted.');
+      return;
+    }
+
+    let attempts = 0;
+    for (const candidate of ordered) {
+      attempts += 1;
+      if (!candidate.healthy) continue;
+
+      if (onExecutePayment) {
+        try {
+          const res = await onExecutePayment({
+            gatewayId: candidate.id,
+            customerEmail: customerEmail.trim(),
+            amount: parsedAmount
+          });
+          if (res.status === 'succeeded') {
+            const tx: GatewayTransaction = {
+              id: res.transactionId || `tx-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              customerEmail: customerEmail.trim(),
+              amount: parsedAmount,
+              routedGateway: candidate.name,
+              attempts,
+              mode: 'live_gateway',
+              status: 'succeeded',
+              createdAtIso: new Date().toISOString()
+            };
+            await appendTransactionAtomically(tx);
+            setStatusNotice(`Live payment succeeded via ${candidate.name} after ${attempts} attempt(s).`);
+            return;
+          }
+        } catch {
+          continue;
+        }
+      } else if (gatewayEndpoint) {
+        try {
+          const resp = await fetch(gatewayEndpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ gatewayId: candidate.id, customerEmail: customerEmail.trim(), amount: parsedAmount })
+          });
+          if (resp.ok) {
+            const tx: GatewayTransaction = {
+              id: `tx-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              customerEmail: customerEmail.trim(),
+              amount: parsedAmount,
+              routedGateway: candidate.name,
+              attempts,
+              mode: 'live_gateway',
+              status: 'succeeded',
+              createdAtIso: new Date().toISOString()
+            };
+            await appendTransactionAtomically(tx);
+            setStatusNotice(`Live gateway endpoint charge succeeded via ${candidate.name}.`);
+            return;
+          }
+        } catch {
+          continue;
+        }
+      } else {
+        // Explicit Sandbox Simulation when no live gateway handler is wired
+        const tx: GatewayTransaction = {
+          id: `sim-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          customerEmail: customerEmail.trim(),
+          amount: parsedAmount,
+          routedGateway: candidate.name,
+          attempts,
+          mode: 'sandbox_simulation',
+          status: 'simulated',
+          createdAtIso: new Date().toISOString()
+        };
+        await appendTransactionAtomically(tx);
+        setStatusNotice(
+          `Sandbox Routing Simulation: selected ${candidate.name} (attempt #${attempts}). Connect onExecutePayment or gatewayEndpoint for live settlement.`
+        );
+        return;
+      }
+    }
+
+    setErrorMsg('All healthy gateways rejected the payment request.');
   };
 
   return (
-    <section aria-label="Payment Gateway Manager" className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] p-4 md:p-8 font-sans">
+    <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
-        <header className="border-b border-[#262626] pb-4">
-          <h1 className="text-2xl md:text-3xl font-bold text-[#D4AF37]">Payment Gateway Manager</h1>
-          <p className="text-sm text-[#A3A3A3]">Multi-Gateway Routing, Exponential Backoff Retry & Automatic Failover</p>
+        <header className="border-b border-zinc-800 pb-4 flex justify-between items-center">
+          <div>
+            <h1 className="text-2xl font-bold text-[#D4AF37]">Multi-Gateway Payment Failover & Routing Manager</h1>
+            <p className="text-sm text-zinc-400">
+              {onExecutePayment || gatewayEndpoint
+                ? 'Connected to Live Gateway Handler'
+                : 'Sandbox Failover Simulation Mode (pass onExecutePayment or gatewayEndpoint for live charges)'}
+            </p>
+          </div>
         </header>
 
+        {statusNotice && (
+          <div role="status" className="bg-emerald-950/60 border border-emerald-700 text-emerald-200 px-4 py-2 rounded text-sm">
+            {statusNotice}
+          </div>
+        )}
+        {errorMsg && (
+          <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">
+            {errorMsg}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {gateways.map(gw => (
-            <div key={gw.id} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-4 space-y-2">
-              <div className="flex justify-between items-center">
-                <span className="text-xs font-mono text-[#D4AF37]">Priority #{gw.priority}</span>
-                <span className="text-xs px-2 py-0.5 rounded bg-[#1F1F1F]">{gw.status}</span>
+          {gateways.map(g => (
+            <div key={g.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex justify-between items-center">
+              <div>
+                <div className="text-xs text-zinc-400">Priority #{g.priority} · Fee {g.feePct}%</div>
+                <div className="font-bold text-white">{g.name}</div>
               </div>
-              <h2 className="text-lg font-bold">{gw.name}</h2>
-              <p className="text-xs text-[#A3A3A3]">
-                Auth Rate: {gw.successRate}% • Max Retries: {gw.maxRetries} • Base Backoff: {gw.baseBackoffMs}ms
-              </p>
               <button
                 type="button"
-                onClick={() => toggleGatewayStatus(gw.id)}
-                className="w-full py-1.5 rounded bg-[#1F1F1F] border border-[#D4AF37]/40 text-[#D4AF37] text-xs font-semibold"
+                onClick={() => toggleGatewayHealth(g.id)}
+                className={`px-3 py-1 rounded text-xs font-bold ${
+                  g.healthy ? 'bg-emerald-950 text-emerald-300 border border-emerald-700' : 'bg-red-950 text-red-300 border border-red-700'
+                }`}
               >
-                Cycle Health State
+                {g.healthy ? 'Healthy' : 'Outage'}
               </button>
             </div>
           ))}
         </div>
 
-        <form onSubmit={processChargeWithRetry} className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5 flex flex-wrap items-end gap-4">
-          <div>
-            <label htmlFor="pg-amount" className="block text-xs text-[#A3A3A3] mb-1">Charge Amount (USD)</label>
-            <input
-              id="pg-amount"
-              type="number"
-              step="0.01"
-              required
-              value={chargeAmount}
-              onChange={e => setChargeAmount(e.target.value)}
-              className="bg-[#0A0A0A] border border-[#262626] rounded-lg px-3 py-2 text-sm text-[#F5F5F5]"
-            />
-          </div>
-          <label htmlFor="pg-sim-fail" className="flex items-center gap-2 text-xs text-[#A3A3A3] py-2 cursor-pointer">
-            <input
-              id="pg-sim-fail"
-              type="checkbox"
-              checked={simulateFailureOnPrimary}
-              onChange={e => setSimulateFailureOnPrimary(e.target.checked)}
-              className="accent-[#D4AF37]"
-            />
-            Simulate Primary Timeout (Trigger Exponential Backoff + Failover)
-          </label>
-          <button type="submit" className="px-4 py-2 rounded-lg bg-[#D4AF37] text-[#0A0A0A] font-bold text-sm">
-            Execute Charge
+        <form onSubmit={handleRoutePayment} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap gap-3">
+          <input
+            type="email"
+            value={customerEmail}
+            onChange={e => setCustomerEmail(e.target.value)}
+            placeholder="Customer Email"
+            className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
+          />
+          <input
+            type="number"
+            step="0.01"
+            value={amount}
+            onChange={e => setAmount(e.target.value)}
+            placeholder="Amount ($)"
+            className="w-40 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white"
+          />
+          <button type="submit" className="bg-[#D4AF37] text-black font-bold text-sm px-5 py-2 rounded">
+            {onExecutePayment || gatewayEndpoint ? 'Execute Live Gateway Charge' : 'Simulate Failover Routing'}
           </button>
         </form>
 
-        <div className="bg-[#0D0D0D] border border-[#262626] rounded-xl p-5">
-          <h2 className="text-lg font-semibold text-[#D4AF37] mb-3">Transaction & Retry Audit Log ({transactions.length})</h2>
-          <div className="space-y-2 text-sm">
-            {transactions.map(tx => (
-              <div key={tx.id} className="flex flex-wrap justify-between items-center p-3 rounded bg-[#141414] border border-[#262626]">
-                <div>
-                  <span className="font-mono text-[#D4AF37] mr-2">{tx.id}</span>
-                  <span className="font-semibold">${tx.amount.toFixed(2)}</span>
-                  <span className="text-xs text-[#A3A3A3] ml-2">via {tx.gatewayUsed}</span>
-                </div>
-                <div className="text-xs text-[#22C55E]">
-                  {tx.status} ({tx.attempts} attempt{tx.attempts > 1 ? 's' : ''}, {tx.backoffDelayMs}ms backoff) • {tx.timestamp}
-                </div>
-              </div>
-            ))}
-          </div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-2">
+          <h2 className="text-sm font-bold text-[#D4AF37]">Routing Audit Log ({transactions.length})</h2>
+          {transactions.map(tx => (
+            <div key={tx.id} className="bg-zinc-950 border border-zinc-800 rounded p-3 flex justify-between text-xs">
+              <span>
+                <strong className="text-[#D4AF37]">{tx.id}</strong> · {tx.customerEmail} · ${tx.amount.toFixed(2)}
+              </span>
+              <span>
+                {tx.routedGateway} ({tx.attempts} attempt{tx.attempts > 1 ? 's' : ''}) ·{' '}
+                <strong className={tx.status === 'succeeded' ? 'text-emerald-400' : 'text-amber-300'}>
+                  {tx.status.toUpperCase()} ({tx.mode})
+                </strong>
+              </span>
+            </div>
+          ))}
         </div>
       </div>
-    </section>
+    </div>
   );
-}
+};
 
 export default PaymentGatewayManager;
