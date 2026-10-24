@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+'use client';
+import React, { useState, useRef } from 'react';
 
 export interface ABExperiment {
   id: string;
@@ -48,21 +49,26 @@ export const ABTestingFramework: React.FC<ABTestingFrameworkProps> = ({
   const [visitorsB, setVisitorsB] = useState('1000');
   const [conversionsB, setConversionsB] = useState('115');
   const [errorMsg, setErrorMsg] = useState('');
+  const saveSeqRef = useRef(0);
 
   const persistExperiments = async (next: ABExperiment[]) => {
+    const seq = ++saveSeqRef.current;
     const prev = experiments;
     setExperiments(next);
     setErrorMsg('');
     try {
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
       if (onChange) {
         await onChange(next);
       }
+      if (seq !== saveSeqRef.current) return;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
     } catch {
-      setExperiments(prev);
-      setErrorMsg('Failed to persist experiments.');
+      if (seq === saveSeqRef.current) {
+        setExperiments(prev);
+        setErrorMsg('Failed to persist experiments; rolled back.');
+      }
     }
   };
 
@@ -76,12 +82,10 @@ export const ABTestingFramework: React.FC<ABTestingFrameworkProps> = ({
     const pB = cB / nB;
     const diff = pB - pA;
 
-    // Unpooled standard error for 95% confidence interval of difference in proportions
     const seUnpooled = Math.sqrt((pA * (1 - pA)) / nA + (pB * (1 - pB)) / nB);
     const ciLowPct = (diff - 1.96 * seUnpooled) * 100;
     const ciHighPct = (diff + 1.96 * seUnpooled) * 100;
 
-    // Relative lift handling when baseline Control A has 0 conversions
     const relativeLiftLabel =
       pA === 0
         ? pB === 0
@@ -89,7 +93,6 @@ export const ABTestingFramework: React.FC<ABTestingFrameworkProps> = ({
           : 'Undefined (Baseline A has 0 conversions)'
         : `${(((pB - pA) / pA) * 100).toFixed(2)}%`;
 
-    // Minimum sample & cell count precondition for valid normal Z-approximation
     const sampleSufficient =
       nA >= 30 &&
       nB >= 30 &&
@@ -143,7 +146,7 @@ export const ABTestingFramework: React.FC<ABTestingFrameworkProps> = ({
       return;
     }
     const created: ABExperiment = {
-      id: `exp-${Date.now()}`,
+      id: `exp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       name: name.trim(),
       visitorsA: Math.round(vA),
       conversionsA: Math.round(cA),
