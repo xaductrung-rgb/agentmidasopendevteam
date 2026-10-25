@@ -44,6 +44,15 @@ const DEFAULT_EPISODES: PodcastEpisode[] = [
   }
 ];
 
+function inferAudioMimeType(url: string): string {
+  const clean = url.split('?')[0].split('#')[0].toLowerCase();
+  if (clean.endsWith('.mp3')) return 'audio/mpeg';
+  if (clean.endsWith('.m4a') || clean.endsWith('.mp4')) return 'audio/mp4';
+  if (clean.endsWith('.wav')) return 'audio/wav';
+  if (clean.endsWith('.aac')) return 'audio/aac';
+  return 'audio/ogg';
+}
+
 function escapeXml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
