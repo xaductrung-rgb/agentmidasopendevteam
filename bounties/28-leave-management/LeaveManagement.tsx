@@ -114,11 +114,9 @@ export const LeaveManagement: React.FC<LeaveManagementProps> = ({
       if (onChange) {
         await onChange(next);
       }
-      try {
-        if (typeof window !== 'undefined') {
-          window.localStorage.setItem(storageKey, JSON.stringify(next));
-        }
-      } catch {}
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
       setNotice(msg);
       return true;
     } catch {
