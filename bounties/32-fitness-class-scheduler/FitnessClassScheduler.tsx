@@ -51,7 +51,9 @@ function isValidClass(item: unknown): item is FitnessClassSession {
     typeof c.capacity === 'number' &&
     c.capacity > 0 &&
     Array.isArray(c.enrolledMembers) &&
-    Array.isArray(c.waitlistMembers)
+    c.enrolledMembers.every(m => typeof m === 'string') &&
+    Array.isArray(c.waitlistMembers) &&
+    c.waitlistMembers.every(m => typeof m === 'string')
   );
 }
 
@@ -203,7 +205,7 @@ export const FitnessClassScheduler: React.FC<FitnessClassSchedulerProps> = ({
               <div className="space-y-1 text-xs">
                 {c.enrolledMembers.map(m => (
                   <div key={m} className="flex justify-between items-center bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1">
-                    <span className="text-emerald-300">✓ {m}</span>
+                    <span className="text-emerald-300">✓ Enrolled: {m}</span>
                     <button
                       type="button"
                       aria-label={`Cancel booking for ${m}`}
@@ -212,6 +214,20 @@ export const FitnessClassScheduler: React.FC<FitnessClassSchedulerProps> = ({
                       className="text-red-400 hover:underline"
                     >
                       Cancel
+                    </button>
+                  </div>
+                ))}
+                {c.waitlistMembers.map((m, idx) => (
+                  <div key={`wl-${m}`} className="flex justify-between items-center bg-zinc-950/60 border border-amber-800/60 rounded px-2.5 py-1">
+                    <span className="text-amber-300">⏳ Waitlist #{idx + 1}: {m}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove waitlisted member ${m}`}
+                      disabled={isSaving}
+                      onClick={() => void cancelBooking(c.id, m)}
+                      className="text-red-400 hover:underline"
+                    >
+                      Remove
                     </button>
                   </div>
                 ))}
