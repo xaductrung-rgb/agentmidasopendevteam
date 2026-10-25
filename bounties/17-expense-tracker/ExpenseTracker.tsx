@@ -11,6 +11,7 @@ export interface ExpenseRecord {
   taxDeductible: boolean;
   incurredDate: string;
   receiptName?: string;
+  receiptDataUrl?: string;
   status: 'Approved' | 'Pending Audit';
 }
 
@@ -38,6 +39,7 @@ const DEFAULT_EXPENSES: ExpenseRecord[] = [
     taxDeductible: true,
     incurredDate: '2026-10-18',
     receiptName: 'aws-oct-invoice.pdf',
+    receiptDataUrl: 'data:text/plain;utf8,AWS-INVOICE-101',
     status: 'Approved'
   },
   {
@@ -48,9 +50,22 @@ const DEFAULT_EXPENSES: ExpenseRecord[] = [
     taxDeductible: true,
     incurredDate: '2026-10-20',
     receiptName: 'meta-ads-receipt.pdf',
+    receiptDataUrl: 'data:text/plain;utf8,META-RECEIPT-102',
     status: 'Approved'
   }
 ];
+
+function getLocalTodayIso(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function getLocalMonthIso(): string {
+  return getLocalTodayIso().slice(0, 7);
+}
 
 function isValidExpense(item: unknown): item is ExpenseRecord {
   if (!item || typeof item !== 'object') return false;
@@ -90,13 +105,15 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
   const expensesRef = useRef<ExpenseRecord[]>(expenses);
   expensesRef.current = expenses;
   const saveLockRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [vendor, setVendor] = useState('');
   const [category, setCategory] = useState<ExpenseCategory>('Cloud Infrastructure');
   const [amountInput, setAmountInput] = useState('500');
-  const [incurredDate, setIncurredDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [activeMonth, setActiveMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [incurredDate, setIncurredDate] = useState(() => getLocalTodayIso());
+  const [activeMonth, setActiveMonth] = useState(() => getLocalMonthIso());
   const [receiptName, setReceiptName] = useState('');
+  const [receiptDataUrl, setReceiptDataUrl] = useState('');
   const [taxDeductible, setTaxDeductible] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [isSaving, setIsSaving] = useState(false);
@@ -115,14 +132,17 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
       if (onChange) {
         await onChange(next);
       }
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(storageKey, JSON.stringify(next));
+        }
+      } catch {}
       setNotice(msg);
       return true;
     } catch {
       expensesRef.current = prev;
       setExpenses(prev);
+      setNotice('');
       setErrorMsg('Failed to persist expense ledger; rolled back.');
       return false;
     } finally {
@@ -131,16 +151,39 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
     }
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      setReceiptName('');
+      setReceiptDataUrl('');
+      return;
+    }
+    setReceiptName(file.name);
+    if (typeof FileReader !== 'undefined') {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          setReceiptDataUrl(reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+    } else {
+      setReceiptDataUrl(`data:application/octet-stream;name=${encodeURIComponent(file.name)}`);
+    }
+  };
+
   const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (saveLockRef.current) return;
     const amt = Number(amountInput.trim());
     if (!vendor.trim() || !incurredDate.trim() || !Number.isFinite(amt) || amt <= 0 || amt > 10_000_000) {
+      setNotice('');
       setErrorMsg('Vendor name, valid date, and USD amount between $0.01 and $10,000,000 are required.');
       return;
     }
     const roundedAmt = Number(amt.toFixed(2));
     if (!Number.isFinite(roundedAmt) || roundedAmt <= 0) {
+      setNotice('');
       setErrorMsg('Invalid expense amount.');
       return;
     }
@@ -152,6 +195,7 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
       taxDeductible,
       incurredDate: incurredDate.trim(),
       receiptName: receiptName.trim() || undefined,
+      receiptDataUrl: receiptDataUrl || undefined,
       status: 'Approved'
     };
     const ok = await persistExpenses([created, ...expensesRef.current], `Logged expense for ${created.vendor}.`);
@@ -159,6 +203,10 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
       setVendor('');
       setAmountInput('500');
       setReceiptName('');
+      setReceiptDataUrl('');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
       setActiveMonth(created.incurredDate.slice(0, 7));
     }
   };
@@ -186,7 +234,7 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
         <header className="border-b border-zinc-800 pb-4 flex flex-wrap justify-between items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold text-[#D4AF37]">Corporate Expense & Budget Variance Tracker</h1>
-            <p className="text-sm text-zinc-400">Categorize monthly operational spend, receipts, and tax-deductible items</p>
+            <p className="text-sm text-zinc-400">Categorize monthly operational spend, receipt attachments, and tax-deductible items</p>
           </div>
           <div className="flex flex-wrap items-center gap-3 text-xs">
             <label className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 px-3 py-2 rounded">
@@ -227,11 +275,12 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
           <input aria-label="Amount USD" type="number" min={0.01} max={10000000} step="0.01" value={amountInput} onChange={e => setAmountInput(e.target.value)} disabled={isSaving} placeholder="Amount ($)" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
           <input aria-label="Incurred Date" type="date" value={incurredDate} onChange={e => setIncurredDate(e.target.value)} disabled={isSaving} className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-white" />
           <input
+            ref={fileInputRef}
             aria-label="Receipt File Upload"
             type="file"
             accept="image/*,.pdf"
             disabled={isSaving}
-            onChange={e => setReceiptName(e.target.files?.[0]?.name || '')}
+            onChange={handleFileChange}
             className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-xs text-zinc-300"
           />
           <label className="flex items-center gap-2 text-xs text-zinc-300">
@@ -264,6 +313,11 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
                 <div className="text-xs text-zinc-400">
                   {exp.category} · {exp.incurredDate} · {exp.taxDeductible ? 'Tax-Deductible' : 'Non-Deductible'}
                   {exp.receiptName ? ` · Receipt: ${exp.receiptName}` : ''}
+                  {exp.receiptDataUrl ? (
+                    <a href={exp.receiptDataUrl} download={exp.receiptName || 'receipt'} className="ml-2 text-[#D4AF37] underline">
+                      Download Stored Receipt
+                    </a>
+                  ) : null}
                 </div>
               </div>
               <div className="text-sm font-mono font-bold text-[#D4AF37]">${exp.amountUsd.toLocaleString()}</div>
