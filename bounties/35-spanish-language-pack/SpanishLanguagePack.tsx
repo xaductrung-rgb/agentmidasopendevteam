@@ -1,266 +1,283 @@
 'use client';
-import React, { useState, useEffect, useRef, useMemo } from 'react';
 
-export type SpanishVariant = 'es-ES' | 'es-MX' | 'es-AR';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 
-export interface SpanishTranslationItem {
+export interface SpanishTranslationEntry {
   key: string;
-  module: 'Navigation' | 'CRM' | 'Affiliate' | 'Billing' | 'Auth';
-  englishSource: string;
-  translations: Record<SpanishVariant, string>;
+  section: string;
+  en: string;
+  esES: string;
+  es419: string;
 }
 
 export interface SpanishLanguagePackProps {
+  initialEntries?: SpanishTranslationEntry[];
   storageKey?: string;
-  initialEntries?: SpanishTranslationItem[];
-  onChange?: (entries: SpanishTranslationItem[]) => void | Promise<void>;
+  onChange?: (entries: SpanishTranslationEntry[]) => void | Promise<void>;
 }
 
-const VARIANTS: SpanishVariant[] = ['es-ES', 'es-MX', 'es-AR'];
-
-const DEFAULT_ENTRIES: SpanishTranslationItem[] = [
-  {
-    key: 'nav.dashboard.overview',
-    module: 'Navigation',
-    englishSource: 'Welcome back, {{name}} — you have {{count}} active referrals.',
-    translations: {
-      'es-ES': 'Bienvenido de nuevo, {{name}} — tienes {{count}} referidos activos.',
-      'es-MX': 'Bienvenido de nuevo, {{name}} — tienes {{count}} referidos activos.',
-      'es-AR': 'Bienvenido de nuevo, {{name}} — tenés {{count}} referidos activos.'
-    }
-  },
-  {
-    key: 'affiliate.twoup.status',
-    module: 'Affiliate',
-    englishSource: '75% Recurring Commission & Two-Up Pass-Up Qualified',
-    translations: {
-      'es-ES': '75% de comisión recurrente y calificado para pase Two-Up',
-      'es-MX': '75% de comisión recurrente y calificado para pase Two-Up',
-      'es-AR': '75% de comisión recurrente y calificado para pase Two-Up'
-    }
-  },
-  {
-    key: 'billing.invoice.export',
-    module: 'Billing',
-    englishSource: 'Download Invoice PDF & Reconcile Stripe Payout',
-    translations: {
-      'es-ES': 'Descargar factura PDF y conciliar pago de Stripe',
-      'es-MX': 'Descargar factura en PDF y conciliar pago de Stripe',
-      'es-AR': 'Descargar factura en PDF y conciliar cobro de Stripe'
-    }
-  },
-  {
-    key: 'crm.pipeline.action',
-    module: 'CRM',
-    englishSource: 'Move deal to Closed Won and trigger onboarding sequence',
-    translations: {
-      'es-ES': 'Mover trato a Cerrado Ganado e iniciar secuencia de incorporación',
-      'es-MX': 'Mover oportunidad a Cerrada Ganada e iniciar secuencia de incorporación',
-      'es-AR': 'Mover oportunidad a Cerrada Ganada e iniciar secuencia de alta'
-    }
-  }
+const DEFAULT_SPANISH_PACK: SpanishTranslationEntry[] = [
+  { key: 'nav.dashboard', section: 'Navigation', en: 'Executive Dashboard', esES: 'Panel de control ejecutivo', es419: 'Tablero ejecutivo' },
+  { key: 'nav.analytics', section: 'Navigation', en: 'Revenue Analytics', esES: 'Analítica de ingresos', es419: 'Análisis de ingresos' },
+  { key: 'nav.settings', section: 'Navigation', en: 'Workspace Settings', esES: 'Ajustes del espacio de trabajo', es419: 'Configuración del espacio de trabajo' },
+  { key: 'nav.billing', section: 'Navigation', en: 'Billing & Subscriptions', esES: 'Facturación y suscripciones', es419: 'Facturación y suscripciones' },
+  { key: 'actions.save', section: 'Actions', en: 'Save Changes', esES: 'Guardar cambios', es419: 'Guardar cambios' },
+  { key: 'actions.cancel', section: 'Actions', en: 'Cancel Action', esES: 'Cancelar acción', es419: 'Cancelar acción' },
+  { key: 'actions.export', section: 'Actions', en: 'Download Report', esES: 'Descargar informe', es419: 'Descargar reporte' },
+  { key: 'actions.delete', section: 'Actions', en: 'Delete Record', esES: 'Eliminar registro', es419: 'Eliminar registro' },
+  { key: 'auth.login', section: 'Authentication', en: 'Sign in to your account', esES: 'Inicia sesión en tu cuenta', es419: 'Inicia sesión en tu cuenta' },
+  { key: 'auth.logout', section: 'Authentication', en: 'Sign out safely', esES: 'Cerrar sesión de forma segura', es419: 'Cerrar sesión de forma segura' },
+  { key: 'auth.resetPassword', section: 'Authentication', en: 'Reset password', esES: 'Restablecer contraseña', es419: 'Restablecer contraseña' },
+  { key: 'billing.invoice', section: 'Billing', en: 'Tax Invoice & Receipt', esES: 'Factura fiscal y recibo', es419: 'Comprobante fiscal y recibo' },
+  { key: 'billing.paymentMethod', section: 'Billing', en: 'Update payment card', esES: 'Actualizar tarjeta de pago', es419: 'Actualizar tarjeta de pago' },
+  { key: 'status.welcome', section: 'Onboarding', en: 'Welcome back, {{name}}!', esES: '¡Bienvenido de nuevo, {{name}}!', es419: '¡Qué gusto verte de nuevo, {{name}}!' },
+  { key: 'status.loading', section: 'Status', en: 'Loading workspace data...', esES: 'Cargando datos del espacio...', es419: 'Cargando datos del espacio...' },
+  { key: 'status.empty', section: 'Status', en: 'No matching records found', esES: 'No se encontraron registros coincidentes', es419: 'No se encontraron registros coincidentes' }
 ];
 
-function detectSpanishVariant(): SpanishVariant {
-  if (typeof navigator !== 'undefined') {
-    const langs = navigator.languages ? [...navigator.languages] : [navigator.language || ''];
-    for (const raw of langs) {
-      const lower = String(raw || '').toLowerCase();
-      if (lower.startsWith('es-mx')) return 'es-MX';
-      if (lower.startsWith('es-ar')) return 'es-AR';
-      if (lower.startsWith('es')) return 'es-ES';
-    }
-  }
-  return 'es-ES';
-}
-
-function isValidEntry(item: unknown): item is SpanishTranslationItem {
-  if (!item || typeof item !== 'object') return false;
-  const e = item as Record<string, unknown>;
-  if (typeof e.key !== 'string' || typeof e.englishSource !== 'string' || !e.translations || typeof e.translations !== 'object') {
-    return false;
-  }
-  const t = e.translations as Record<string, unknown>;
-  return VARIANTS.every(v => typeof t[v] === 'string');
-}
-
-function interpolateText(template: string, vars: Record<string, string | number>): string {
-  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k: string) =>
-    vars[k] !== undefined ? String(vars[k]) : `{{${k}}}`
+function isValidPack(val: unknown): val is SpanishTranslationEntry[] {
+  return (
+    Array.isArray(val) &&
+    val.every(
+      (item) =>
+        item &&
+        typeof item === 'object' &&
+        typeof (item as SpanishTranslationEntry).key === 'string' &&
+        typeof (item as SpanishTranslationEntry).section === 'string' &&
+        typeof (item as SpanishTranslationEntry).en === 'string' &&
+        typeof (item as SpanishTranslationEntry).esES === 'string' &&
+        typeof (item as SpanishTranslationEntry).es419 === 'string'
+    )
   );
 }
 
-export const SpanishLanguagePack: React.FC<SpanishLanguagePackProps> = ({
+export default function SpanishLanguagePack({
+  initialEntries = DEFAULT_SPANISH_PACK,
   storageKey = 'agentmidas_spanish_pack_v1',
-  initialEntries = DEFAULT_ENTRIES,
   onChange
-}) => {
-  const [entries, setEntries] = useState<SpanishTranslationItem[]>(initialEntries);
-  const entriesRef = useRef<SpanishTranslationItem[]>(entries);
-  entriesRef.current = entries;
-  const saveLockRef = useRef(false);
+}: SpanishLanguagePackProps) {
+  const initialEntriesRef = useRef(initialEntries);
+  initialEntriesRef.current = initialEntries;
+  const activeKeyRef = useRef(storageKey);
+  activeKeyRef.current = storageKey;
 
-  const [variant, setVariant] = useState<SpanishVariant>('es-ES');
-  const [detectedBrowserLocale, setDetectedBrowserLocale] = useState<string>('es-ES');
-  const [sampleName, setSampleName] = useState('Carlos');
-  const [sampleCount, setSampleCount] = useState<number>(12);
+  const [entries, setEntries] = useState<SpanishTranslationEntry[]>(() =>
+    isValidPack(initialEntries) && initialEntries.length > 0 ? initialEntries : DEFAULT_SPANISH_PACK
+  );
+  const [variant, setVariant] = useState<'esES' | 'es419'>('es419');
+  const [search, setSearch] = useState('');
+  const [previewName, setPreviewName] = useState('Carlos');
   const [newKey, setNewKey] = useState('');
-  const [newEnglish, setNewEnglish] = useState('');
-  const [newSpanish, setNewSpanish] = useState('');
+  const [newEn, setNewEn] = useState('');
+  const [newEsES, setNewEsES] = useState('');
+  const [newEs419, setNewEs419] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [notice, setNotice] = useState('');
 
   useEffect(() => {
-    const detected = detectSpanishVariant();
-    setVariant(detected);
-    if (typeof navigator !== 'undefined' && navigator.language) {
-      setDetectedBrowserLocale(navigator.language);
-    }
-  }, []);
-
-  useEffect(() => {
+    const fallback =
+      isValidPack(initialEntriesRef.current) && initialEntriesRef.current.length > 0
+        ? initialEntriesRef.current
+        : DEFAULT_SPANISH_PACK;
+    if (typeof window === 'undefined') return;
     try {
-      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
-      if (saved !== null) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(isValidEntry)) {
-          entriesRef.current = parsed;
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (isValidPack(parsed) && parsed.length > 0) {
           setEntries(parsed);
           return;
         }
       }
-    } catch {}
-    entriesRef.current = initialEntries;
-    setEntries(initialEntries);
-  }, [storageKey, initialEntries]);
+    } catch {
+      // ignore read errors
+    }
+    setEntries(fallback);
+  }, [storageKey]);
 
-  const handleAddKey = async (e: React.FormEvent) => {
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return entries;
+    return entries.filter(
+      (e) =>
+        e.key.toLowerCase().includes(q) ||
+        e.en.toLowerCase().includes(q) ||
+        e.esES.toLowerCase().includes(q) ||
+        e.es419.toLowerCase().includes(q)
+    );
+  }, [entries, search]);
+
+  async function handleAddEntry(e: React.FormEvent) {
     e.preventDefault();
-    if (saveLockRef.current) return;
+    if (isSaving) return;
     const k = newKey.trim();
-    const en = newEnglish.trim();
-    const es = newSpanish.trim();
-    if (!k || !en || !es) {
-      setNotice('');
-      setErrorMsg('Translation key, English source, and Spanish translation are required.');
+    const enVal = newEn.trim();
+    const esEsVal = newEsES.trim();
+    const es419Val = newEs419.trim();
+    if (!k || !enVal || !esEsVal || !es419Val) {
+      setError('Key, English source, es-ES translation, and es-419 translation are all required.');
       return;
     }
-    saveLockRef.current = true;
-    setIsSaving(true);
-    const prev = entriesRef.current;
-    const item: SpanishTranslationItem = {
+    const updated: SpanishTranslationEntry = {
       key: k,
-      module: 'Navigation',
-      englishSource: en,
-      translations: {
-        'es-ES': es,
-        'es-MX': es,
-        'es-AR': es
-      }
+      section: 'Custom',
+      en: enVal,
+      esES: esEsVal,
+      es419: es419Val
     };
-    const next = [item, ...prev.filter(x => x.key !== k)];
-    entriesRef.current = next;
+    const keyAtStart = storageKey;
+    const prev = entries;
+    const next = [updated, ...entries.filter((item) => item.key !== k)];
+    setIsSaving(true);
+    setError(null);
     setEntries(next);
-    setErrorMsg('');
     try {
-      if (onChange) {
-        await onChange(next);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(keyAtStart, JSON.stringify(next));
       }
-      try {
-        if (typeof window !== 'undefined') {
-          window.localStorage.setItem(storageKey, JSON.stringify(next));
-        }
-      } catch {}
+      await onChange?.(next);
       setNewKey('');
-      setNewEnglish('');
-      setNewSpanish('');
-      setNotice(`Saved Spanish translation key "${k}".`);
+      setNewEn('');
+      setNewEsES('');
+      setNewEs419('');
     } catch {
-      entriesRef.current = prev;
-      setEntries(prev);
-      setNotice('');
-      setErrorMsg('Failed to persist Spanish language pack; rolled back.');
+      if (activeKeyRef.current === keyAtStart) {
+        setEntries(prev);
+      }
+      setError('Failed to persist Spanish translation entry.');
     } finally {
-      saveLockRef.current = false;
       setIsSaving(false);
     }
-  };
-
-  const exportedJson = useMemo(() => {
-    const out: Record<string, string> = {};
-    for (const item of entries) {
-      out[item.key] = item.translations[variant];
-    }
-    return JSON.stringify({ locale: variant, messages: out }, null, 2);
-  }, [entries, variant]);
+  }
 
   return (
-    <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
-      <div className="max-w-5xl mx-auto space-y-6">
-        <header className="border-b border-zinc-800 pb-4 flex flex-wrap justify-between items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-[#D4AF37]">Spanish Language Pack (es-ES / es-MX / es-AR)</h1>
-            <p className="text-sm text-zinc-400">
-              Auto-detected browser locale: <strong className="text-white">{detectedBrowserLocale}</strong> · Active regional variant: <strong className="text-[#D4AF37]">{variant}</strong>
-            </p>
-          </div>
-          <select
-            aria-label="Select Spanish Regional Variant"
-            value={variant}
-            onChange={e => setVariant(e.target.value as SpanishVariant)}
-            className="bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-xs text-white"
+    <div className="p-6 bg-white rounded-xl shadow-sm border border-slate-200 max-w-5xl mx-auto">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900">Spanish Language Pack (es-ES / es-419)</h2>
+          <p className="text-sm text-slate-600">
+            Complete Spanish UI localization bundle with regional dialect switching and variable interpolation.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            aria-pressed={variant === 'es419'}
+            onClick={() => setVariant('es419')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+              variant === 'es419' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-slate-300'
+            }`}
           >
-            <option value="es-ES">Español (España - es-ES)</option>
-            <option value="es-MX">Español (México - es-MX)</option>
-            <option value="es-AR">Español (Argentina - es-AR)</option>
-          </select>
-        </header>
-
-        {notice && <div role="status" className="bg-emerald-950/60 border border-emerald-700 text-emerald-200 px-4 py-2 rounded text-sm">{notice}</div>}
-        {errorMsg && <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{errorMsg}</div>}
-
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-          <label className="space-y-1">
-            <span className="text-zinc-400">Interpolation Variable: {'{{name}}'}</span>
-            <input aria-label="Sample User Name" value={sampleName} onChange={e => setSampleName(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-white" />
-          </label>
-          <label className="space-y-1">
-            <span className="text-zinc-400">Interpolation Variable: {'{{count}}'}</span>
-            <input aria-label="Sample Referral Count" type="number" value={sampleCount} onChange={e => setSampleCount(Number(e.target.value) || 0)} className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-white" />
-          </label>
-        </div>
-
-        <form onSubmit={handleAddKey} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-4 gap-3">
-          <input aria-label="Translation Key" value={newKey} onChange={e => setNewKey(e.target.value)} disabled={isSaving} placeholder="e.g. nav.cta.launch" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs text-white" />
-          <input aria-label="English Source String" value={newEnglish} onChange={e => setNewEnglish(e.target.value)} disabled={isSaving} placeholder="English source" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs text-white" />
-          <input aria-label="Spanish Translation String" value={newSpanish} onChange={e => setNewSpanish(e.target.value)} disabled={isSaving} placeholder="Traducción en español" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs text-white" />
-          <button type="submit" disabled={isSaving} className="bg-[#D4AF37] text-black font-bold text-xs rounded px-4 py-2">
-            + Add Spanish Key
+            Latin America (es-419)
           </button>
-        </form>
-
-        <div className="space-y-2">
-          {entries.map(item => (
-            <div key={item.key} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-1">
-              <div className="flex justify-between text-xs text-zinc-400 font-mono">
-                <span className="text-[#D4AF37]">{item.key}</span>
-                <span>{item.module}</span>
-              </div>
-              <div className="text-xs text-zinc-400">EN: {interpolateText(item.englishSource, { name: sampleName, count: sampleCount })}</div>
-              <div className="text-sm font-bold text-white">
-                {variant}: {interpolateText(item.translations[variant], { name: sampleName, count: sampleCount })}
-              </div>
-            </div>
-          ))}
+          <button
+            type="button"
+            aria-pressed={variant === 'esES'}
+            onClick={() => setVariant('esES')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+              variant === 'esES' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-slate-300'
+            }`}
+          >
+            Spain (es-ES)
+          </button>
         </div>
-
-        <pre className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-xs text-zinc-400 overflow-x-auto">
-          {exportedJson}
-        </pre>
       </div>
+
+      {error && (
+        <div role="alert" className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+          {error}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <input
+          type="search"
+          aria-label="Search Spanish translations"
+          placeholder="Search key, English, or Spanish text..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+        />
+        <div className="flex items-center gap-2">
+          <label htmlFor="es-preview-name" className="text-xs font-medium text-slate-600">
+            Preview Variable (`{{name}}`):
+          </label>
+          <input
+            id="es-preview-name"
+            type="text"
+            value={previewName}
+            onChange={(e) => setPreviewName(e.target.value)}
+            className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm"
+          />
+        </div>
+      </div>
+
+      <div className="overflow-x-auto border border-slate-200 rounded-lg mb-6">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500">
+            <tr>
+              <th className="p-3">Key</th>
+              <th className="p-3">English Source</th>
+              <th className="p-3">Active Spanish ({variant === 'es419' ? 'es-419' : 'es-ES'})</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-200">
+            {filtered.map((item) => {
+              const raw = item[variant];
+              const rendered = raw.replace(/\{\{name\}\}/g, previewName || 'Usuario');
+              return (
+                <tr key={item.key}>
+                  <td className="p-3 font-mono text-xs text-indigo-700">{item.key}</td>
+                  <td className="p-3 text-slate-600">{item.en}</td>
+                  <td className="p-3 font-medium text-slate-900">{rendered}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <form onSubmit={handleAddEntry} className="grid grid-cols-1 md:grid-cols-5 gap-3 pt-4 border-t border-slate-200">
+        <input
+          type="text"
+          aria-label="Translation key"
+          placeholder="Key (e.g.cta.upgrade)"
+          value={newKey}
+          onChange={(e) => setNewKey(e.target.value)}
+          className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+        />
+        <input
+          type="text"
+          aria-label="English source string"
+          placeholder="English text"
+          value={newEn}
+          onChange={(e) => setNewEn(e.target.value)}
+          className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+        />
+        <input
+          type="text"
+          aria-label="Spain Spanish es-ES string"
+          placeholder="Spain (es-ES)"
+          value={newEsES}
+          onChange={(e) => setNewEsES(e.target.value)}
+          className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+        />
+        <input
+          type="text"
+          aria-label="Latin America Spanish es-419 string"
+          placeholder="LatAm (es-419)"
+          value={newEs419}
+          onChange={(e) => setNewEs419(e.target.value)}
+          className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+        />
+        <button
+          type="submit"
+          disabled={isSaving}
+          className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+        >
+          {isSaving ? 'Saving...' : 'Add / Update Key'}
+        </button>
+      </form>
     </div>
   );
-};
-
-export default SpanishLanguagePack;
+}
