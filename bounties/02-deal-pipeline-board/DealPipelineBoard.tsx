@@ -199,9 +199,8 @@ export const DealPipelineBoard: React.FC<DealPipelineBoardProps> = ({
     const totalPipelineUsd = deals
       .filter(d => d.stage !== 'Closed Lost')
       .reduce((s, d) => s + d.valueUsd, 0);
-    const weightedForecastUsd = deals.reduce(
-      (s, d) => s + Math.round(d.valueUsd * (d.probabilityPct / 100)),
-      0
+    const weightedForecastUsd = Math.round(
+      deals.reduce((s, d) => s + d.valueUsd * (d.probabilityPct / 100), 0)
     );
     const closedWonUsd = deals
       .filter(d => d.stage === 'Closed Won')
