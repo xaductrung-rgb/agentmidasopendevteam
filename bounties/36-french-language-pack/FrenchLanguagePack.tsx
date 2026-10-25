@@ -1,267 +1,283 @@
 'use client';
-import React, { useState, useEffect, useRef, useMemo } from 'react';
 
-export type FrenchVariant = 'fr-FR' | 'fr-CA';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 
-export interface FrenchTranslationItem {
+export interface FrenchTranslationEntry {
   key: string;
-  module: 'Navigation' | 'CRM' | 'Affiliate' | 'Billing' | 'Auth';
-  englishSource: string;
-  translations: Record<FrenchVariant, string>;
+  section: string;
+  en: string;
+  frFR: string;
+  frCA: string;
 }
 
 export interface FrenchLanguagePackProps {
+  initialEntries?: FrenchTranslationEntry[];
   storageKey?: string;
-  initialEntries?: FrenchTranslationItem[];
-  onChange?: (entries: FrenchTranslationItem[]) => void | Promise<void>;
+  onChange?: (entries: FrenchTranslationEntry[]) => void | Promise<void>;
 }
 
-const VARIANTS: FrenchVariant[] = ['fr-FR', 'fr-CA'];
-
-const DEFAULT_ENTRIES: FrenchTranslationItem[] = [
-  {
-    key: 'nav.dashboard.greeting',
-    module: 'Navigation',
-    englishSource: 'Welcome {{name}} — {{count}} active commission stream(s).',
-    translations: {
-      'fr-FR': 'Bienvenue {{name}} — {{count}} flux de commissions actif(s).',
-      'fr-CA': 'Bienvenue {{name}} — {{count}} flux de commissions actif(s).'
-    }
-  },
-  {
-    key: 'affiliate.twoup.banner',
-    module: 'Affiliate',
-    englishSource: '75% Recurring Commission & Two-Up Pass-Up Engine',
-    translations: {
-      'fr-FR': 'Commission récurrente de 75 % et moteur de remontée Two-Up',
-      'fr-CA': 'Commission récurrente de 75 % et système de transfert Two-Up'
-    }
-  },
-  {
-    key: 'billing.stripe.settlement',
-    module: 'Billing',
-    englishSource: 'Instant Stripe Payout & Tax Invoice Export',
-    translations: {
-      'fr-FR': 'Versement Stripe instantané et exportation de facture fiscale',
-      'fr-CA': 'Virement Stripe instantané et téléchargement de facture fiscale'
-    }
-  },
-  {
-    key: 'auth.mfa.verify',
-    module: 'Auth',
-    englishSource: 'Verify Two-Factor Security Code to Continue',
-    translations: {
-      'fr-FR': 'Vérifiez le code de sécurité à deux facteurs pour continuer',
-      'fr-CA': 'Vérifiez le code de validation en deux étapes pour continuer'
-    }
-  }
+const DEFAULT_FRENCH_PACK: FrenchTranslationEntry[] = [
+  { key: 'nav.dashboard', section: 'Navigation', en: 'Executive Dashboard', frFR: 'Tableau de bord exécutif', frCA: 'Tableau de bord de direction' },
+  { key: 'nav.analytics', section: 'Navigation', en: 'Revenue Analytics', frFR: 'Analytique des revenus', frCA: 'Analyse des revenus' },
+  { key: 'nav.settings', section: 'Navigation', en: 'Workspace Settings', frFR: 'Paramètres de l’espace de travail', frCA: 'Paramètres de l’espace de travail' },
+  { key: 'nav.billing', section: 'Navigation', en: 'Billing & Subscriptions', frFR: 'Facturation et abonnements', frCA: 'Facturation et abonnements' },
+  { key: 'actions.save', section: 'Actions', en: 'Save Changes', frFR: 'Enregistrer les modifications', frCA: 'Sauvegarder les modifications' },
+  { key: 'actions.cancel', section: 'Actions', en: 'Cancel Action', frFR: 'Annuler l’action', frCA: 'Annuler l’action' },
+  { key: 'actions.export', section: 'Actions', en: 'Download Report', frFR: 'Télécharger le rapport', frCA: 'Télécharger le rapport' },
+  { key: 'actions.delete', section: 'Actions', en: 'Delete Record', frFR: 'Supprimer l’enregistrement', frCA: 'Supprimer l’enregistrement' },
+  { key: 'auth.login', section: 'Authentication', en: 'Sign in via Email', frFR: 'Connexion par e-mail', frCA: 'Connexion par courriel' },
+  { key: 'auth.logout', section: 'Authentication', en: 'Sign out safely', frFR: 'Se déconnecter en toute sécurité', frCA: 'Se déconnecter en toute sécurité' },
+  { key: 'auth.resetPassword', section: 'Authentication', en: 'Reset password', frFR: 'Réinitialiser le mot de passe', frCA: 'Réinitialiser le mot de passe' },
+  { key: 'billing.invoice', section: 'Billing', en: 'Tax Invoice & Receipt', frFR: 'Facture fiscale et reçu', frCA: 'Facture de taxes et reçu' },
+  { key: 'billing.paymentMethod', section: 'Billing', en: 'Update payment card', frFR: 'Mettre à jour la carte bancaire', frCA: 'Mettre à jour la carte de paiement' },
+  { key: 'status.welcome', section: 'Onboarding', en: 'Welcome back, {{name}}!', frFR: 'Bon retour, {{name}} !', frCA: 'Bon retour parmi nous, {{name}} !' },
+  { key: 'status.loading', section: 'Status', en: 'Loading workspace data...', frFR: 'Chargement des données...', frCA: 'Chargement des données...' },
+  { key: 'status.empty', section: 'Status', en: 'No matching records found', frFR: 'Aucun enregistrement correspondant', frCA: 'Aucun dossier correspondant' }
 ];
 
-function detectFrenchVariant(): FrenchVariant {
-  if (typeof navigator !== 'undefined') {
-    const langs = navigator.languages ? [...navigator.languages] : [navigator.language || ''];
-    for (const raw of langs) {
-      const lower = String(raw || '').toLowerCase();
-      if (lower.startsWith('fr-ca')) return 'fr-CA';
-      if (lower.startsWith('fr')) return 'fr-FR';
-    }
-  }
-  return 'fr-FR';
-}
-
-function isValidEntry(item: unknown): item is FrenchTranslationItem {
-  if (!item || typeof item !== 'object') return false;
-  const e = item as Record<string, unknown>;
-  if (typeof e.key !== 'string' || typeof e.englishSource !== 'string' || !e.translations || typeof e.translations !== 'object') {
-    return false;
-  }
-  const t = e.translations as Record<string, unknown>;
-  return VARIANTS.every(v => typeof t[v] === 'string');
-}
-
-function interpolateFrench(template: string, vars: Record<string, string | number>): string {
-  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k: string) =>
-    vars[k] !== undefined ? String(vars[k]) : `{{${k}}}`
+function isValidFrenchPack(val: unknown): val is FrenchTranslationEntry[] {
+  return (
+    Array.isArray(val) &&
+    val.every(
+      (item) =>
+        item &&
+        typeof item === 'object' &&
+        typeof (item as FrenchTranslationEntry).key === 'string' &&
+        typeof (item as FrenchTranslationEntry).section === 'string' &&
+        typeof (item as FrenchTranslationEntry).en === 'string' &&
+        typeof (item as FrenchTranslationEntry).frFR === 'string' &&
+        typeof (item as FrenchTranslationEntry).frCA === 'string'
+    )
   );
 }
 
-export const FrenchLanguagePack: React.FC<FrenchLanguagePackProps> = ({
+export default function FrenchLanguagePack({
+  initialEntries = DEFAULT_FRENCH_PACK,
   storageKey = 'agentmidas_french_pack_v1',
-  initialEntries = DEFAULT_ENTRIES,
   onChange
-}) => {
-  const [entries, setEntries] = useState<FrenchTranslationItem[]>(initialEntries);
-  const entriesRef = useRef<FrenchTranslationItem[]>(entries);
-  entriesRef.current = entries;
-  const saveLockRef = useRef(false);
+}: FrenchLanguagePackProps) {
+  const initialEntriesRef = useRef(initialEntries);
+  initialEntriesRef.current = initialEntries;
+  const activeKeyRef = useRef(storageKey);
+  activeKeyRef.current = storageKey;
 
-  const [variant, setVariant] = useState<FrenchVariant>('fr-FR');
-  const [detectedBrowserLocale, setDetectedBrowserLocale] = useState<string>('fr-FR');
-  const [sampleName, setSampleName] = useState('Camille');
-  const [sampleCount, setSampleCount] = useState<number>(4);
+  const [entries, setEntries] = useState<FrenchTranslationEntry[]>(() =>
+    isValidFrenchPack(initialEntries) && initialEntries.length > 0 ? initialEntries : DEFAULT_FRENCH_PACK
+  );
+  const [variant, setVariant] = useState<'frFR' | 'frCA'>('frFR');
+  const [search, setSearch] = useState('');
+  const [previewName, setPreviewName] = useState('Camille');
   const [newKey, setNewKey] = useState('');
-  const [newEnglish, setNewEnglish] = useState('');
-  const [newFrench, setNewFrench] = useState('');
+  const [newEn, setNewEn] = useState('');
+  const [newFrFR, setNewFrFR] = useState('');
+  const [newFrCA, setNewFrCA] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [notice, setNotice] = useState('');
 
   useEffect(() => {
-    const detected = detectFrenchVariant();
-    setVariant(detected);
-    if (typeof navigator !== 'undefined' && navigator.language) {
-      setDetectedBrowserLocale(navigator.language);
-    }
-  }, []);
-
-  useEffect(() => {
+    const fallback =
+      isValidFrenchPack(initialEntriesRef.current) && initialEntriesRef.current.length > 0
+        ? initialEntriesRef.current
+        : DEFAULT_FRENCH_PACK;
+    if (typeof window === 'undefined') return;
     try {
-      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
-      if (saved !== null) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(isValidEntry)) {
-          entriesRef.current = parsed;
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (isValidFrenchPack(parsed) && parsed.length > 0) {
           setEntries(parsed);
           return;
         }
       }
-    } catch {}
-    entriesRef.current = initialEntries;
-    setEntries(initialEntries);
-  }, [storageKey, initialEntries]);
+    } catch {
+      // ignore read errors
+    }
+    setEntries(fallback);
+  }, [storageKey]);
 
-  const handleAddKey = async (e: React.FormEvent) => {
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return entries;
+    return entries.filter(
+      (e) =>
+        e.key.toLowerCase().includes(q) ||
+        e.en.toLowerCase().includes(q) ||
+        e.frFR.toLowerCase().includes(q) ||
+        e.frCA.toLowerCase().includes(q)
+    );
+  }, [entries, search]);
+
+  async function handleAddEntry(e: React.FormEvent) {
     e.preventDefault();
-    if (saveLockRef.current) return;
+    if (isSaving) return;
     const k = newKey.trim();
-    const en = newEnglish.trim();
-    const fr = newFrench.trim();
-    if (!k || !en || !fr) {
-      setNotice('');
-      setErrorMsg('Translation key, English source, and French translation are required.');
+    const enVal = newEn.trim();
+    const frFRVal = newFrFR.trim();
+    const frCAVal = newFrCA.trim();
+    if (!k || !enVal || !frFRVal || !frCAVal) {
+      setError('Key, English source, fr-FR translation, and fr-CA translation are all required.');
       return;
     }
-    saveLockRef.current = true;
-    setIsSaving(true);
-    const prev = entriesRef.current;
-    const item: FrenchTranslationItem = {
+    const updated: FrenchTranslationEntry = {
       key: k,
-      module: 'Navigation',
-      englishSource: en,
-      translations: {
-        'fr-FR': fr,
-        'fr-CA': fr
-      }
+      section: 'Custom',
+      en: enVal,
+      frFR: frFRVal,
+      frCA: frCAVal
     };
-    const next = [item, ...prev.filter(x => x.key !== k)];
-    entriesRef.current = next;
+    const keyAtStart = storageKey;
+    const prev = entries;
+    const next = [updated, ...entries.filter((item) => item.key !== k)];
+    setIsSaving(true);
+    setError(null);
     setEntries(next);
-    setErrorMsg('');
     try {
-      if (onChange) {
-        await onChange(next);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(keyAtStart, JSON.stringify(next));
       }
-      try {
-        if (typeof window !== 'undefined') {
-          window.localStorage.setItem(storageKey, JSON.stringify(next));
-        }
-      } catch {}
+      await onChange?.(next);
       setNewKey('');
-      setNewEnglish('');
-      setNewFrench('');
-      setNotice(`Saved French translation key "${k}".`);
+      setNewEn('');
+      setNewFrFR('');
+      setNewFrCA('');
     } catch {
-      entriesRef.current = prev;
-      setEntries(prev);
-      setNotice('');
-      setErrorMsg('Failed to persist French language pack; rolled back.');
+      if (activeKeyRef.current === keyAtStart) {
+        setEntries(prev);
+      }
+      setError('Failed to persist French translation entry.');
     } finally {
-      saveLockRef.current = false;
       setIsSaving(false);
     }
-  };
-
-  // French CLDR plural rule: 0 and 1 use singular ('one'), >= 2 uses plural ('other')
-  const pluralPreview = useMemo(() => {
-    const isSingular = sampleCount === 0 || sampleCount === 1;
-    return isSingular
-      ? `${sampleCount} affilié actif qualifié (règle CLDR fr : singulier pour 0 et 1)`
-      : `${sampleCount} affiliés actifs qualifiés (règle CLDR fr : pluriel pour ≥ 2)`;
-  }, [sampleCount]);
-
-  const exportedJson = useMemo(() => {
-    const out: Record<string, string> = {};
-    for (const item of entries) {
-      out[item.key] = item.translations[variant];
-    }
-    return JSON.stringify({ locale: variant, messages: out }, null, 2);
-  }, [entries, variant]);
+  }
 
   return (
-    <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
-      <div className="max-w-5xl mx-auto space-y-6">
-        <header className="border-b border-zinc-800 pb-4 flex flex-wrap justify-between items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-[#D4AF37]">French Language Pack (fr-FR / fr-CA)</h1>
-            <p className="text-sm text-zinc-400">
-              Browser locale: <strong className="text-white">{detectedBrowserLocale}</strong> · Active variant: <strong className="text-[#D4AF37]">{variant}</strong> · {pluralPreview}
-            </p>
-          </div>
-          <select
-            aria-label="Select French Regional Variant"
-            value={variant}
-            onChange={e => setVariant(e.target.value as FrenchVariant)}
-            className="bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-xs text-white"
+    <div className="p-6 bg-white rounded-xl shadow-sm border border-slate-200 max-w-5xl mx-auto">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900">French Language Pack (fr-FR / fr-CA)</h2>
+          <p className="text-sm text-slate-600">
+            Complete French UI localization with typographical non-breaking space rules and regional variants.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            aria-pressed={variant === 'frFR'}
+            onClick={() => setVariant('frFR')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+              variant === 'frFR' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-slate-300'
+            }`}
           >
-            <option value="fr-FR">Français (France - fr-FR)</option>
-            <option value="fr-CA">Français (Canada - fr-CA)</option>
-          </select>
-        </header>
-
-        {notice && <div role="status" className="bg-emerald-950/60 border border-emerald-700 text-emerald-200 px-4 py-2 rounded text-sm">{notice}</div>}
-        {errorMsg && <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{errorMsg}</div>}
-
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-          <label className="space-y-1">
-            <span className="text-zinc-400">Variable: {'{{name}}'}</span>
-            <input aria-label="Sample French User Name" value={sampleName} onChange={e => setSampleName(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-white" />
-          </label>
-          <label className="space-y-1">
-            <span className="text-zinc-400">Variable: {'{{count}}'}</span>
-            <input aria-label="Sample French Count" type="number" min={0} value={sampleCount} onChange={e => setSampleCount(Math.max(0, Number(e.target.value) || 0))} className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-1.5 text-white" />
-          </label>
-        </div>
-
-        <form onSubmit={handleAddKey} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-4 gap-3">
-          <input aria-label="French Translation Key" value={newKey} onChange={e => setNewKey(e.target.value)} disabled={isSaving} placeholder="e.g. nav.cta.start" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs text-white" />
-          <input aria-label="English Source Text" value={newEnglish} onChange={e => setNewEnglish(e.target.value)} disabled={isSaving} placeholder="English source" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs text-white" />
-          <input aria-label="French Translation Text" value={newFrench} onChange={e => setNewFrench(e.target.value)} disabled={isSaving} placeholder="Traduction en français" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs text-white" />
-          <button type="submit" disabled={isSaving} className="bg-[#D4AF37] text-black font-bold text-xs rounded px-4 py-2">
-            + Add French Key
+            France (fr-FR)
           </button>
-        </form>
-
-        <div className="space-y-2">
-          {entries.map(item => (
-            <div key={item.key} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-1">
-              <div className="flex justify-between text-xs text-zinc-400 font-mono">
-                <span className="text-[#D4AF37]">{item.key}</span>
-                <span>{item.module}</span>
-              </div>
-              <div className="text-xs text-zinc-400">EN: {interpolateFrench(item.englishSource, { name: sampleName, count: sampleCount })}</div>
-              <div className="text-sm font-bold text-white">
-                {variant}: {interpolateFrench(item.translations[variant], { name: sampleName, count: sampleCount })}
-              </div>
-            </div>
-          ))}
+          <button
+            type="button"
+            aria-pressed={variant === 'frCA'}
+            onClick={() => setVariant('frCA')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+              variant === 'frCA' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-slate-300'
+            }`}
+          >
+            Canada (fr-CA)
+          </button>
         </div>
-
-        <pre className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-xs text-zinc-400 overflow-x-auto">
-          {exportedJson}
-        </pre>
       </div>
+
+      {error && (
+        <div role="alert" className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+          {error}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <input
+          type="search"
+          aria-label="Search French translations"
+          placeholder="Search key, English, or French text..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+        />
+        <div className="flex items-center gap-2">
+          <label htmlFor="fr-preview-name" className="text-xs font-medium text-slate-600">
+            Preview Variable (`{{name}}`):
+          </label>
+          <input
+            id="fr-preview-name"
+            type="text"
+            value={previewName}
+            onChange={(e) => setPreviewName(e.target.value)}
+            className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm"
+          />
+        </div>
+      </div>
+
+      <div className="overflow-x-auto border border-slate-200 rounded-lg mb-6">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500">
+            <tr>
+              <th className="p-3">Key</th>
+              <th className="p-3">English Source</th>
+              <th className="p-3">Active French ({variant === 'frFR' ? 'fr-FR' : 'fr-CA'})</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-200">
+            {filtered.map((item) => {
+              const raw = item[variant];
+              const rendered = raw.replace(/\{\{name\}\}/g, previewName || 'Utilisateur');
+              return (
+                <tr key={item.key}>
+                  <td className="p-3 font-mono text-xs text-indigo-700">{item.key}</td>
+                  <td className="p-3 text-slate-600">{item.en}</td>
+                  <td className="p-3 font-medium text-slate-900">{rendered}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <form onSubmit={handleAddEntry} className="grid grid-cols-1 md:grid-cols-5 gap-3 pt-4 border-t border-slate-200">
+        <input
+          type="text"
+          aria-label="Translation key"
+          placeholder="Key (e.g. cta.upgrade)"
+          value={newKey}
+          onChange={(e) => setNewKey(e.target.value)}
+          className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+        />
+        <input
+          type="text"
+          aria-label="English source string"
+          placeholder="English text"
+          value={newEn}
+          onChange={(e) => setNewEn(e.target.value)}
+          className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+        />
+        <input
+          type="text"
+          aria-label="France French fr-FR string"
+          placeholder="France (fr-FR)"
+          value={newFrFR}
+          onChange={(e) => setNewFrFR(e.target.value)}
+          className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+        />
+        <input
+          type="text"
+          aria-label="Canadian French fr-CA string"
+          placeholder="Canada (fr-CA)"
+          value={newFrCA}
+          onChange={(e) => setNewFrCA(e.target.value)}
+          className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+        />
+        <button
+          type="submit"
+          disabled={isSaving}
+          className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+        >
+          {isSaving ? 'Saving...' : 'Add / Update Key'}
+        </button>
+      </form>
     </div>
   );
-};
-
-export default FrenchLanguagePack;
+}
