@@ -1,386 +1,449 @@
 'use client';
-import React, { useState, useEffect, useRef, useMemo } from 'react';
 
-export interface VideoAsset {
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+
+export interface VideoChapter {
   id: string;
   title: string;
-  description: string;
+  startSeconds: number;
+}
+
+export interface VideoTranscriptCue {
+  id: string;
+  startSeconds: number;
+  endSeconds: number;
+  text: string;
+}
+
+export interface VideoItem {
+  id: string;
+  title: string;
+  category: string;
+  durationSeconds: number;
   videoUrl: string;
-  durationSec: number;
-  tags: string[];
+  chapters: VideoChapter[];
+  transcript: VideoTranscriptCue[];
   views: number;
-  uploadedAt: string;
 }
 
 export interface VideoContentLibraryProps {
+  initialVideos?: VideoItem[];
   storageKey?: string;
-  initialVideos?: VideoAsset[];
-  onChange?: (videos: VideoAsset[]) => void | Promise<void>;
+  onChange?: (videos: VideoItem[]) => void | Promise<void>;
 }
 
-const DEFAULT_VIDEOS: VideoAsset[] = [
+const DEFAULT_VIDEOS: VideoItem[] = [
   {
-    id: 'vid-101',
-    title: 'Two-Up Commission Engine Architecture Deep Dive',
-    description: 'Walkthrough of pass-up qualification rules, Stripe Connect splits, and real-time ledger reconciliation.',
-    videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-    durationSec: 15,
-    tags: ['affiliate', 'architecture', 'stripe'],
-    views: 1420,
-    uploadedAt: '2026-10-18'
+    id: 'vid-1',
+    title: 'Getting Started with Autonomous Workflows',
+    category: 'Onboarding',
+    durationSeconds: 180,
+    videoUrl: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+    views: 142,
+    chapters: [
+      { id: 'ch-1', title: 'Overview & Setup', startSeconds: 0 },
+      { id: 'ch-2', title: 'Configuring Agents', startSeconds: 45 },
+      { id: 'ch-3', title: 'Live Deployment', startSeconds: 110 }
+    ],
+    transcript: [
+      { id: 'tr-1', startSeconds: 0, endSeconds: 44, text: 'Welcome to the autonomous workflow onboarding guide and environment setup.' },
+      { id: 'tr-2', startSeconds: 45, endSeconds: 109, text: 'Configure your agent triggers, retry policies, and webhook secrets.' },
+      { id: 'tr-3', startSeconds: 110, endSeconds: 180, text: 'Verify live telemetry and audit logs in the production dashboard.' }
+    ]
   },
   {
-    id: 'vid-102',
-    title: 'High-Converting Funnel Setup in 10 Minutes',
-    description: 'Step-by-step guide to launching mobile-first landing pages with UTM attribution and A/B split testing.',
-    videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
-    durationSec: 15,
-    tags: ['funnels', 'conversion', 'onboarding'],
-    views: 980,
-    uploadedAt: '2026-10-21'
+    id: 'vid-2',
+    title: 'Advanced Revenue & Funnel Attribution',
+    category: 'Analytics',
+    durationSeconds: 240,
+    videoUrl: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+    views: 89,
+    chapters: [
+      { id: 'ch-21', title: 'Multi-Touch Models', startSeconds: 0 },
+      { id: 'ch-22', title: 'Cohort Retention', startSeconds: 95 }
+    ],
+    transcript: [
+      { id: 'tr-21', startSeconds: 0, endSeconds: 94, text: 'Compare first-touch, linear, and time-decay attribution across channels.' },
+      { id: 'tr-22', startSeconds: 95, endSeconds: 240, text: 'Analyze net dollar retention and expansion revenue by customer cohort.' }
+    ]
   }
 ];
 
-function isValidHttpUrl(raw: string): boolean {
-  try {
-    const u = new URL(raw);
-    return u.protocol === 'http:' || u.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
-function isValidVideo(item: unknown): item is VideoAsset {
-  if (!item || typeof item !== 'object') return false;
-  const v = item as Record<string, unknown>;
+function isValidVideoList(val: unknown): val is VideoItem[] {
   return (
-    typeof v.id === 'string' &&
-    typeof v.title === 'string' &&
-    typeof v.description === 'string' &&
-    typeof v.videoUrl === 'string' &&
-    isValidHttpUrl(v.videoUrl) &&
-    typeof v.durationSec === 'number' &&
-    Number.isFinite(v.durationSec) &&
-    v.durationSec > 0 &&
-    Array.isArray(v.tags) &&
-    v.tags.every(t => typeof t === 'string') &&
-    typeof v.views === 'number' &&
-    Number.isFinite(v.views) &&
-    v.views >= 0 &&
-    typeof v.uploadedAt === 'string'
+    Array.isArray(val) &&
+    val.every(
+      (v) =>
+        v &&
+        typeof v === 'object' &&
+        typeof (v as VideoItem).id === 'string' &&
+        typeof (v as VideoItem).title === 'string' &&
+        typeof (v as VideoItem).category === 'string' &&
+        typeof (v as VideoItem).videoUrl === 'string' &&
+        typeof (v as VideoItem).durationSeconds === 'number' &&
+        Number.isFinite((v as VideoItem).durationSeconds) &&
+        typeof (v as VideoItem).views === 'number' &&
+        Number.isFinite((v as VideoItem).views) &&
+        Array.isArray((v as VideoItem).chapters) &&
+        Array.isArray((v as VideoItem).transcript)
+    )
   );
 }
 
-function formatDuration(sec: number): string {
-  const total = Math.max(0, Math.round(sec));
-  const m = Math.floor(total / 60);
-  const s = total % 60;
+function formatTime(sec: number): string {
+  const safe = Math.max(0, Math.floor(Number.isFinite(sec) ? sec : 0));
+  const m = Math.floor(safe / 60);
+  const s = safe % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function getLocalDateString(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-export const VideoContentLibrary: React.FC<VideoContentLibraryProps> = ({
-  storageKey = 'agentmidas_video_library_v1',
+export default function VideoContentLibrary({
   initialVideos = DEFAULT_VIDEOS,
+  storageKey = 'agentmidas_video_content_library_v1',
   onChange
-}) => {
-  const [videos, setVideos] = useState<VideoAsset[]>(initialVideos);
-  const videosRef = useRef<VideoAsset[]>(videos);
-  videosRef.current = videos;
-  const saveLockRef = useRef(false);
+}: VideoContentLibraryProps) {
+  const initialVideosRef = useRef(initialVideos);
+  initialVideosRef.current = initialVideos;
+  const activeKeyRef = useRef(storageKey);
+  activeKeyRef.current = storageKey;
 
-  const [selectedVideoId, setSelectedVideoId] = useState<string>(initialVideos[0]?.id || '');
+  const [videos, setVideos] = useState<VideoItem[]>(() =>
+    isValidVideoList(initialVideos) && initialVideos.length > 0 ? initialVideos : DEFAULT_VIDEOS
+  );
+  const [selectedVideoId, setSelectedVideoId] = useState<string>(videos[0]?.id ?? '');
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedTag, setSelectedTag] = useState<string>('ALL');
-  const [titleInput, setTitleInput] = useState('');
-  const [descInput, setDescInput] = useState('');
-  const [urlInput, setUrlInput] = useState('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4');
-  const [durationInput, setDurationInput] = useState('60');
-  const [tagsInput, setTagsInput] = useState('training, product');
+  const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [currentTime, setCurrentTime] = useState<number>(0);
+  const [newTitle, setNewTitle] = useState('');
+  const [newCategory, setNewCategory] = useState('Tutorials');
+  const [newUrl, setNewUrl] = useState('');
+  const [newTranscriptText, setNewTranscriptText] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [notice, setNotice] = useState('');
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
+    const fallback =
+      isValidVideoList(initialVideosRef.current) && initialVideosRef.current.length > 0
+        ? initialVideosRef.current
+        : DEFAULT_VIDEOS;
+    if (typeof window === 'undefined') return;
     try {
-      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
-      if (saved !== null) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.every(isValidVideo)) {
-          videosRef.current = parsed;
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (isValidVideoList(parsed) && parsed.length > 0) {
           setVideos(parsed);
-          setSelectedVideoId(parsed[0]?.id || '');
+          setSelectedVideoId(parsed[0].id);
           return;
         }
       }
-    } catch {}
-    videosRef.current = initialVideos;
-    setVideos(initialVideos);
-    setSelectedVideoId(initialVideos[0]?.id || '');
-  }, [storageKey, initialVideos]);
-
-  const persistVideos = async (next: VideoAsset[], msg: string): Promise<boolean> => {
-    if (saveLockRef.current) return false;
-    saveLockRef.current = true;
-    setIsSaving(true);
-    const prev = videosRef.current;
-    videosRef.current = next;
-    setVideos(next);
-    setErrorMsg('');
-    try {
-      if (onChange) {
-        await onChange(next.map(v => ({ ...v, tags: [...v.tags] })));
-      }
-      try {
-        if (typeof window !== 'undefined') {
-          window.localStorage.setItem(storageKey, JSON.stringify(next));
-        }
-      } catch {}
-      setNotice(msg);
-      return true;
     } catch {
-      videosRef.current = prev;
-      setVideos(prev);
-      setNotice('');
-      setErrorMsg('Failed to persist video library changes; rolled back.');
-      return false;
-    } finally {
-      saveLockRef.current = false;
-      setIsSaving(false);
+      // ignore read errors
     }
-  };
+    setVideos(fallback);
+    setSelectedVideoId(fallback[0]?.id ?? '');
+  }, [storageKey]);
 
-  const allTags = useMemo(() => {
-    const set = new Set<string>();
-    for (const v of videos) {
-      for (const t of v.tags) set.add(t);
-    }
-    return ['ALL', ...Array.from(set).sort()];
+  const categories = useMemo(() => {
+    const set = new Set<string>(['All']);
+    videos.forEach((v) => set.add(v.category));
+    return Array.from(set);
   }, [videos]);
 
   const filteredVideos = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return videos.filter(v => {
-      const matchesTag = selectedTag === 'ALL' || v.tags.includes(selectedTag);
-      if (!matchesTag) return false;
+    return videos.filter((v) => {
+      const catMatch = selectedCategory === 'All' || v.category === selectedCategory;
+      if (!catMatch) return false;
       if (!q) return true;
-      return (
-        v.title.toLowerCase().includes(q) ||
-        v.description.toLowerCase().includes(q) ||
-        v.tags.some(t => t.toLowerCase().includes(q))
-      );
+      const inTitle = v.title.toLowerCase().includes(q);
+      const inTranscript = v.transcript.some((t) => t.text.toLowerCase().includes(q));
+      const inChapters = v.chapters.some((c) => c.title.toLowerCase().includes(q));
+      return inTitle || inTranscript || inChapters;
     });
-  }, [videos, searchQuery, selectedTag]);
+  }, [videos, searchQuery, selectedCategory]);
 
   const activeVideo = useMemo(() => {
-    return filteredVideos.find(v => v.id === selectedVideoId) || filteredVideos[0] || null;
+    return filteredVideos.find((v) => v.id === selectedVideoId) ?? filteredVideos[0] ?? null;
   }, [filteredVideos, selectedVideoId]);
 
-  const handleAddVideo = async (e: React.FormEvent) => {
+  const vttDataUri = useMemo(() => {
+    if (!activeVideo) return '';
+    const lines = ['WEBVTT', ''];
+    activeVideo.transcript.forEach((cue) => {
+      const startH = String(Math.floor(cue.startSeconds / 3600)).padStart(2, '0');
+      const startM = String(Math.floor((cue.startSeconds % 3600) / 60)).padStart(2, '0');
+      const startS = String(Math.floor(cue.startSeconds % 60)).padStart(2, '0');
+      const endH = String(Math.floor(cue.endSeconds / 3600)).padStart(2, '0');
+      const endM = String(Math.floor((cue.endSeconds % 3600) / 60)).padStart(2, '0');
+      const endS = String(Math.floor(cue.endSeconds % 60)).padStart(2, '0');
+      lines.push(`${startH}:${startM}:${startS}.000 --> ${endH}:${endM}:${endS}.000`);
+      lines.push(cue.text);
+      lines.push('');
+    });
+    return `data:text/vtt;charset=utf-8,${encodeURIComponent(lines.join('\n'))}`;
+  }, [activeVideo]);
+
+  async function persist(next: VideoItem[], prev: VideoItem[]): Promise<boolean> {
+    const keyAtStart = storageKey;
+    setIsSaving(true);
+    setError(null);
+    setVideos(next);
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(keyAtStart, JSON.stringify(next));
+      }
+      await onChange?.(next);
+      return true;
+    } catch {
+      if (activeKeyRef.current === keyAtStart) {
+        setVideos(prev);
+      }
+      setError('Failed to save video library changes.');
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  function seekTo(seconds: number) {
+    const clamped = Math.max(0, seconds);
+    setCurrentTime(clamped);
+    if (videoRef.current) {
+      videoRef.current.currentTime = clamped;
+    }
+  }
+
+  async function handleAddVideo(e: React.FormEvent) {
     e.preventDefault();
-    if (saveLockRef.current) return;
-    const trimmedTitle = titleInput.trim();
-    const trimmedDesc = descInput.trim();
-    const trimmedUrl = urlInput.trim();
-    const dur = Number(durationInput.trim());
-    const parsedTags = Array.from(
-      new Set(
-        tagsInput
-          .split(',')
-          .map(t => t.trim().toLowerCase())
-          .filter(Boolean)
-      )
-    );
-    if (!trimmedTitle || !isValidHttpUrl(trimmedUrl) || !Number.isFinite(dur) || dur <= 0 || parsedTags.length === 0) {
-      setNotice('');
-      setErrorMsg('Provide a valid title, HTTP/HTTPS video URL, positive duration (seconds), and at least one tag.');
+    if (isSaving) return;
+    const trimmedTitle = newTitle.trim();
+    const trimmedUrl = newUrl.trim();
+    if (!trimmedTitle) {
+      setError('Video title is required.');
       return;
     }
-    const created: VideoAsset = {
-      id: `vid-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    try {
+      const parsed = new URL(trimmedUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        setError('Video URL must use http:// or https://.');
+        return;
+      }
+    } catch {
+      setError('Please enter a valid video URL.');
+      return;
+    }
+    const cueText = newTranscriptText.trim() || `Overview transcript for ${trimmedTitle}.`;
+    const created: VideoItem = {
+      id: `vid-${Date.now()}`,
       title: trimmedTitle,
-      description: trimmedDesc || 'No description provided.',
+      category: newCategory.trim() || 'Tutorials',
+      durationSeconds: 120,
       videoUrl: trimmedUrl,
-      durationSec: Math.round(dur),
-      tags: parsedTags,
-      views: 0,
-      uploadedAt: getLocalDateString()
+      views: 1,
+      chapters: [{ id: `ch-${Date.now()}`, title: 'Introduction', startSeconds: 0 }],
+      transcript: [{ id: `tr-${Date.now()}`, startSeconds: 0, endSeconds: 120, text: cueText }]
     };
-    const next = [created, ...videosRef.current];
-    const ok = await persistVideos(next, `Added video "${created.title}" to library.`);
+    const prev = videos;
+    const next = [created, ...videos];
+    const ok = await persist(next, prev);
     if (ok) {
-      setTitleInput('');
-      setDescInput('');
       setSelectedVideoId(created.id);
+      setNewTitle('');
+      setNewUrl('');
+      setNewTranscriptText('');
     }
-  };
-
-  const handleRecordView = async (id: string) => {
-    if (saveLockRef.current) return;
-    const next = videosRef.current.map(v => (v.id === id ? { ...v, views: v.views + 1 } : v));
-    await persistVideos(next, 'Incremented video view count.');
-  };
-
-  const handleDeleteVideo = async (id: string) => {
-    if (saveLockRef.current) return;
-    const target = videosRef.current.find(v => v.id === id);
-    if (!target) return;
-    const next = videosRef.current.filter(v => v.id !== id);
-    const ok = await persistVideos(next, `Removed "${target.title}" from library.`);
-    if (ok && selectedTag !== 'ALL' && !next.some(v => v.tags.includes(selectedTag))) {
-      setSelectedTag('ALL');
-    }
-  };
+  }
 
   return (
-    <div className="min-h-screen bg-[#09090B] text-zinc-100 p-6 font-sans">
-      <div className="max-w-6xl mx-auto space-y-6">
-        <header className="border-b border-zinc-800 pb-4 flex flex-wrap justify-between items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-[#D4AF37]">Video Content Library & Hosting Hub</h1>
-            <p className="text-sm text-zinc-400">Search, tag, preview, and manage hosted training and marketing videos</p>
-          </div>
-          <div className="flex gap-3 text-xs">
-            <div className="bg-zinc-900 border border-zinc-800 px-3 py-2 rounded">
-              <div className="text-zinc-400">Hosted Videos</div>
-              <div className="text-base font-bold text-white">{videos.length}</div>
-            </div>
-            <div className="bg-zinc-900 border border-zinc-800 px-3 py-2 rounded">
-              <div className="text-zinc-400">Total Views</div>
-              <div className="text-base font-bold text-[#D4AF37]">{videos.reduce((s, v) => s + v.views, 0).toLocaleString()}</div>
-            </div>
-          </div>
-        </header>
-
-        {notice && <div role="status" className="bg-emerald-950/60 border border-emerald-700 text-emerald-200 px-4 py-2 rounded text-sm">{notice}</div>}
-        {errorMsg && <div role="alert" className="bg-red-950/60 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{errorMsg}</div>}
-
-        <form onSubmit={handleAddVideo} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-6 gap-3">
-          <input aria-label="Video Title" value={titleInput} onChange={e => setTitleInput(e.target.value)} disabled={isSaving} placeholder="Video Title" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs text-white" />
-          <input aria-label="Video Description" value={descInput} onChange={e => setDescInput(e.target.value)} disabled={isSaving} placeholder="Description" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs text-white" />
-          <input aria-label="Video Stream URL" value={urlInput} onChange={e => setUrlInput(e.target.value)} disabled={isSaving} placeholder="https://.../video.mp4" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs text-white" />
-          <input aria-label="Duration in Seconds" type="number" min={1} value={durationInput} onChange={e => setDurationInput(e.target.value)} disabled={isSaving} placeholder="Duration (sec)" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs text-white" />
-          <input aria-label="Comma Separated Tags" value={tagsInput} onChange={e => setTagsInput(e.target.value)} disabled={isSaving} placeholder="tag1, tag2" className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs text-white" />
-          <button type="submit" disabled={isSaving} className="bg-[#D4AF37] text-black font-bold text-xs rounded px-4 py-2 disabled:opacity-50">
-            + Upload Video
-          </button>
-        </form>
-
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="p-6 bg-white rounded-xl shadow-sm border border-slate-200 max-w-6xl mx-auto">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900">Video Content Library</h2>
+          <p className="text-sm text-slate-600">
+            Browse categorized training videos, jump to chapters, and search synchronized transcripts.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
           <input
-            aria-label="Search Videos by Title Description or Tag"
             type="search"
+            aria-label="Search videos and transcripts"
+            placeholder="Search title, chapters, or transcript..."
             value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Search by title, description, or #tag..."
-            className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white w-full md:w-72"
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
           />
-          <div className="flex flex-wrap gap-1.5">
-            {allTags.map(tag => (
-              <button
-                key={tag}
-                type="button"
-                aria-label={`Filter by tag ${tag}`}
-                onClick={() => setSelectedTag(tag)}
-                className={`px-2.5 py-1 rounded-full text-xs font-medium border ${
-                  selectedTag === tag
-                    ? 'bg-[#D4AF37] text-black border-[#D4AF37]'
-                    : 'bg-zinc-900 text-zinc-300 border-zinc-800'
-                }`}
-              >
-                {tag === 'ALL' ? 'All Tags' : `#${tag}`}
-              </button>
+          <select
+            aria-label="Filter by category"
+            value={selectedCategory}
+            onChange={(e) => setSelectedCategory(e.target.value)}
+            className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+          >
+            {categories.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
             ))}
-          </div>
+          </select>
+        </div>
+      </div>
+
+      {error && (
+        <div role="alert" className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+          {error}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-1 space-y-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">
+            Videos ({filteredVideos.length})
+          </h3>
+          {filteredVideos.length === 0 ? (
+            <p className="text-sm text-slate-500">No videos match your filter.</p>
+          ) : (
+            filteredVideos.map((vid) => {
+              const isSelected = activeVideo?.id === vid.id;
+              return (
+                <button
+                  key={vid.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedVideoId(vid.id);
+                    setCurrentTime(0);
+                  }}
+                  className={`w-full text-left p-3 rounded-lg border transition ${
+                    isSelected ? 'border-indigo-600 bg-indigo-50/60' : 'border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="font-semibold text-slate-900 text-sm">{vid.title}</div>
+                  <div className="flex items-center justify-between text-xs text-slate-500 mt-1">
+                    <span>{vid.category}</span>
+                    <span>{formatTime(vid.durationSeconds)} • {vid.views} views</span>
+                  </div>
+                </button>
+              );
+            })
+          )}
+
+          <form onSubmit={handleAddVideo} className="pt-4 border-t border-slate-200 space-y-2">
+            <h4 className="text-xs font-semibold uppercase text-slate-500">Add Video to Library</h4>
+            <input
+              type="text"
+              aria-label="New video title"
+              placeholder="Video title"
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              className="w-full px-3 py-1.5 border border-slate-300 rounded text-sm"
+            />
+            <input
+              type="text"
+              aria-label="New video category"
+              placeholder="Category"
+              value={newCategory}
+              onChange={(e) => setNewCategory(e.target.value)}
+              className="w-full px-3 py-1.5 border border-slate-300 rounded text-sm"
+            />
+            <input
+              type="url"
+              aria-label="New video URL"
+              placeholder="https://example.com/video.mp4"
+              value={newUrl}
+              onChange={(e) => setNewUrl(e.target.value)}
+              className="w-full px-3 py-1.5 border border-slate-300 rounded text-sm"
+            />
+            <input
+              type="text"
+              aria-label="Initial transcript cue"
+              placeholder="Opening transcript text"
+              value={newTranscriptText}
+              onChange={(e) => setNewTranscriptText(e.target.value)}
+              className="w-full px-3 py-1.5 border border-slate-300 rounded text-sm"
+            />
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="w-full py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {isSaving ? 'Saving...' : 'Add Video'}
+            </button>
+          </form>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
-            {activeVideo ? (
-              <>
+        <div className="lg:col-span-2">
+          {activeVideo ? (
+            <div className="space-y-4">
+              <div className="bg-slate-900 rounded-xl overflow-hidden">
                 <video
-                  key={activeVideo.videoUrl}
-                  src={activeVideo.videoUrl}
+                  ref={videoRef}
+                  key={activeVideo.id}
                   controls
-                  className="w-full rounded-lg bg-black aspect-video"
-                />
-                <div className="flex justify-between items-start gap-4">
-                  <div>
-                    <h2 className="text-lg font-bold text-white">{activeVideo.title}</h2>
-                    <p className="text-xs text-zinc-400 mt-1">{activeVideo.description}</p>
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      {activeVideo.tags.map(t => (
-                        <span key={t} className="text-[11px] bg-zinc-950 border border-zinc-800 text-[#D4AF37] px-2 py-0.5 rounded">
-                          #{t}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="text-right space-y-2">
-                    <div className="text-xs text-zinc-400">
-                      {formatDuration(activeVideo.durationSec)} · {activeVideo.views.toLocaleString()} views · {activeVideo.uploadedAt}
-                    </div>
-                    <button
-                      type="button"
-                      aria-label={`Log view for ${activeVideo.title}`}
-                      disabled={isSaving}
-                      onClick={() => void handleRecordView(activeVideo.id)}
-                      className="px-3 py-1 rounded bg-zinc-800 text-xs text-[#D4AF37] font-bold"
-                    >
-                      +1 Count View
-                    </button>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="p-8 text-center text-sm text-zinc-400">No videos match the current search or tag filter.</div>
-            )}
-          </div>
-
-          <div className="space-y-2 max-h-[420px] overflow-y-auto">
-            {filteredVideos.map(v => (
-              <div
-                key={v.id}
-                className={`p-3 rounded-xl border transition ${
-                  activeVideo?.id === v.id ? 'bg-zinc-900 border-[#D4AF37]' : 'bg-zinc-900/60 border-zinc-800'
-                }`}
-              >
-                <div className="flex justify-between items-start gap-2">
-                  <button
-                    type="button"
-                    aria-label={`Select video ${v.title}`}
-                    onClick={() => setSelectedVideoId(v.id)}
-                    className="text-left font-bold text-xs text-white hover:text-[#D4AF37]"
-                  >
-                    {v.title}
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`Delete video ${v.title}`}
-                    disabled={isSaving}
-                    onClick={() => void handleDeleteVideo(v.id)}
-                    className="text-xs text-red-400 hover:underline"
-                  >
-                    Delete
-                  </button>
-                </div>
-                <div className="text-[11px] text-zinc-400 mt-1">
-                  {formatDuration(v.durationSec)} · {v.views.toLocaleString()} views
+                  src={activeVideo.videoUrl}
+                  onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                  className="w-full max-h-80"
+                >
+                  <track kind="captions" srcLang="en" label="English" src={vttDataUri} default />
+                </video>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900">{activeVideo.title}</h3>
+                  <p className="text-xs text-slate-500">
+                    Category: {activeVideo.category} • Current Timestamp: {formatTime(currentTime)}
+                  </p>
                 </div>
               </div>
-            ))}
-          </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                  <h4 className="text-sm font-semibold text-slate-800 mb-2">Chapters</h4>
+                  <ul className="space-y-1.5">
+                    {activeVideo.chapters.map((ch) => (
+                      <li key={ch.id}>
+                        <button
+                          type="button"
+                          onClick={() => seekTo(ch.startSeconds)}
+                          className="w-full flex items-center justify-between text-left text-xs px-2.5 py-1.5 rounded hover:bg-indigo-50 text-slate-700"
+                        >
+                          <span>{ch.title}</span>
+                          <span className="font-mono text-indigo-600">{formatTime(ch.startSeconds)}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                  <h4 className="text-sm font-semibold text-slate-800 mb-2">Interactive Transcript</h4>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {activeVideo.transcript.map((cue) => {
+                      const active = currentTime >= cue.startSeconds && currentTime <= cue.endSeconds;
+                      return (
+                        <button
+                          key={cue.id}
+                          type="button"
+                          onClick={() => seekTo(cue.startSeconds)}
+                          className={`w-full text-left p-2 rounded text-xs transition ${
+                            active ? 'bg-indigo-100 text-indigo-950 font-medium' : 'hover:bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          <span className="font-mono text-indigo-600 mr-2">[{formatTime(cue.startSeconds)}]</span>
+                          <span>{cue.text}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="p-8 text-center text-slate-500 border border-dashed border-slate-300 rounded-xl">
+              Select a video or clear your search filter to begin playback.
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
-};
-
-export default VideoContentLibrary;
+}
