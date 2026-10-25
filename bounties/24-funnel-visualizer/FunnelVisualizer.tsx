@@ -256,6 +256,7 @@ export const FunnelVisualizer: React.FC<FunnelVisualizerProps> = ({
                     <div className="flex gap-1">
                       <button
                         type="button"
+                        aria-label={`Move stage ${st.name} up`}
                         onClick={() => moveStage(idx, -1)}
                         disabled={idx === 0}
                         className="px-2 py-1 rounded bg-zinc-800 text-zinc-300 disabled:opacity-40"
@@ -264,6 +265,7 @@ export const FunnelVisualizer: React.FC<FunnelVisualizerProps> = ({
                       </button>
                       <button
                         type="button"
+                        aria-label={`Move stage ${st.name} down`}
                         onClick={() => moveStage(idx, 1)}
                         disabled={idx === analyzedStages.length - 1}
                         className="px-2 py-1 rounded bg-zinc-800 text-zinc-300 disabled:opacity-40"
@@ -272,6 +274,7 @@ export const FunnelVisualizer: React.FC<FunnelVisualizerProps> = ({
                       </button>
                       <button
                         type="button"
+                        aria-label={`Delete stage ${st.name}`}
                         onClick={() => deleteStage(st.id)}
                         className="px-2 py-1 rounded bg-red-950 text-red-300 border border-red-800"
                       >
