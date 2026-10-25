@@ -48,7 +48,7 @@ function isValidClass(item: unknown): item is FitnessClassSession {
     typeof c.id === 'string' &&
     typeof c.className === 'string' &&
     typeof c.instructor === 'string' &&
-    typeof c.capacity === 'number' &&
+    typeof c.capacity === 'number' && Number.isInteger((c as any).capacity) &&
     c.capacity > 0 &&
     Array.isArray(c.enrolledMembers) &&
     c.enrolledMembers.every(m => typeof m === 'string') &&
