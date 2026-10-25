@@ -91,7 +91,7 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
       clientEmail,
       taxRatePct: totals.safeTaxRate,
       discountAmount: totals.effectiveDiscount,
-      items,
+      items: items.map(item => ({ ...item })),
       subtotal: totals.subtotal,
       taxAmount: totals.taxAmount,
       totalDue: totals.totalDue
