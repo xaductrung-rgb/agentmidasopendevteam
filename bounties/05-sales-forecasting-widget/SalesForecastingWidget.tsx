@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 
 export interface HistoricalMonth {
   id: string;
@@ -55,22 +55,26 @@ export const SalesForecastingWidget: React.FC<SalesForecastingWidgetProps> = ({
   initialHistory = DEFAULT_HISTORY,
   onChange
 }) => {
-  const [history, setHistory] = useState<HistoricalMonth[]>(() => {
-    try {
-      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length >= 2 && parsed.every(isValidMonth)) {
-          return parsed;
-        }
-      }
-    } catch {}
-    return initialHistory;
-  });
-
+  const [history, setHistory] = useState<HistoricalMonth[]>(initialHistory);
   const historyRef = useRef<HistoricalMonth[]>(history);
   historyRef.current = history;
   const saveLockRef = useRef(false);
+
+  useEffect(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null;
+      if (saved !== null) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length >= 2 && parsed.every(isValidMonth)) {
+          historyRef.current = parsed;
+          setHistory(parsed);
+          return;
+        }
+      }
+    } catch {}
+    historyRef.current = initialHistory;
+    setHistory(initialHistory);
+  }, [storageKey, initialHistory]);
 
   const [monthLabel, setMonthLabel] = useState('2026-11');
   const [revenueInput, setRevenueInput] = useState('66000');
@@ -93,14 +97,17 @@ export const SalesForecastingWidget: React.FC<SalesForecastingWidgetProps> = ({
       if (onChange) {
         await onChange(next);
       }
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(storageKey, JSON.stringify(next));
+        }
+      } catch {}
       setNotice(msg);
       return true;
     } catch {
       historyRef.current = prev;
       setHistory(prev);
+      setNotice('');
       setErrorMsg('Failed to persist historical sales data; rolled back.');
       return false;
     } finally {
@@ -117,6 +124,7 @@ export const SalesForecastingWidget: React.FC<SalesForecastingWidgetProps> = ({
     const rev = Number(revenueInput.trim());
     const cov = Number(coverageInput.trim());
     if (mIdx === null || !revenueInput.trim() || !coverageInput.trim() || !Number.isFinite(rev) || rev < 0 || rev > 1_000_000_000 || !Number.isFinite(cov) || cov <= 0) {
+      setNotice('');
       setErrorMsg('Enter a valid YYYY-MM month label, non-negative revenue, and positive pipeline coverage.');
       return;
     }
@@ -126,7 +134,6 @@ export const SalesForecastingWidget: React.FC<SalesForecastingWidgetProps> = ({
       actualRevenueUsd: Math.round(rev),
       pipelineCoverageRatio: Number(cov.toFixed(2))
     };
-    // Upsert by monthLabel and sort chronologically by calendar month index
     const filtered = historyRef.current.filter(h => h.monthLabel !== trimmedLabel);
     const next = [...filtered, created].sort(
       (a, b) => (parseMonthIndex(a.monthLabel) ?? 0) - (parseMonthIndex(b.monthLabel) ?? 0)
@@ -134,14 +141,13 @@ export const SalesForecastingWidget: React.FC<SalesForecastingWidgetProps> = ({
     await persistHistory(next, `Recorded actuals for ${created.monthLabel}.`);
   };
 
-  // Ordinary Least Squares (OLS) using true calendar month spacing + residual standard error 90% prediction interval
   const forecast = useMemo(() => {
     const sorted = [...history]
       .filter(h => parseMonthIndex(h.monthLabel) !== null)
       .sort((a, b) => (parseMonthIndex(a.monthLabel) ?? 0) - (parseMonthIndex(b.monthLabel) ?? 0));
     const n = sorted.length;
     if (n === 0) {
-      return { slope: 0, residualStdErr: 0, projections: [] as { step: number; label: string; baseUsd: number; lowUsd: number; highUsd: number }[] };
+      return { sorted: [] as HistoricalMonth[], slope: 0, residualStdErr: 0, projections: [] as { step: number; label: string; baseUsd: number; lowUsd: number; highUsd: number }[] };
     }
     const baseMonthIdx = parseMonthIndex(sorted[0].monthLabel) ?? 0;
     const xs = sorted.map(h => (parseMonthIndex(h.monthLabel) ?? baseMonthIdx) - baseMonthIdx);
@@ -157,7 +163,6 @@ export const SalesForecastingWidget: React.FC<SalesForecastingWidgetProps> = ({
     const slope = sxx > 0 ? sxy / sxx : 0;
     const intercept = meanY - slope * meanX;
 
-    // Residual standard error from historical fit
     let sse = 0;
     for (let i = 0; i < n; i++) {
       const yHat = intercept + slope * xs[i];
@@ -186,7 +191,7 @@ export const SalesForecastingWidget: React.FC<SalesForecastingWidgetProps> = ({
         highUsd
       });
     }
-    return { slope: Math.round(slope), residualStdErr: Math.round(sigma), projections };
+    return { sorted, slope: Math.round(slope), residualStdErr: Math.round(sigma), projections };
   }, [history, horizonMonths, scenarioMultiplier]);
 
   return (
@@ -250,6 +255,19 @@ export const SalesForecastingWidget: React.FC<SalesForecastingWidgetProps> = ({
               </div>
             </div>
           ))}
+        </div>
+
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-2">
+          <h3 className="text-xs font-bold text-[#D4AF37] uppercase">Historical Monthly Actuals & Pipeline Coverage</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-5 gap-2">
+            {forecast.sorted.map(h => (
+              <div key={h.id} className="bg-zinc-950 border border-zinc-800 rounded p-2.5 text-xs">
+                <div className="font-mono text-[#D4AF37]">{h.monthLabel}</div>
+                <div className="font-bold text-white">${h.actualRevenueUsd.toLocaleString()}</div>
+                <div className="text-zinc-400">Coverage: {h.pipelineCoverageRatio}x</div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
