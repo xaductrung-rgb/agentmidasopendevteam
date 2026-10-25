@@ -112,9 +112,11 @@ export const UserSessionReplay: React.FC<UserSessionReplayProps> = ({
       if (onChange) {
         await onChange(next);
       }
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(storageKey, JSON.stringify(next));
+        }
+      } catch {}
       setNotice(msg);
       return true;
     } catch {
@@ -193,7 +195,7 @@ export const UserSessionReplay: React.FC<UserSessionReplayProps> = ({
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-4">
               <div className="flex justify-between items-center text-xs text-zinc-400">
-                <span>Viewport Replay: <strong className="text-white">{activeSession.pagePath}</strong></span>
+                <span>Viewport Replay: <strong className="text-white">{activeSession.pagePath}</strong> · <strong className="text-emerald-400">{activeSession.piiMasked ? 'PII Masked' : 'Unmasked'}</strong></span>
                 <span>Playhead: <strong className="text-[#D4AF37]">{playheadMs}ms / {activeSession.durationMs}ms</strong></span>
               </div>
 
@@ -254,7 +256,7 @@ export const UserSessionReplay: React.FC<UserSessionReplayProps> = ({
                       <span>{ev.type.toUpperCase()}</span>
                       <span>{ev.timestampMs}ms</span>
                     </div>
-                    <div className="text-zinc-300 truncate">{ev.targetSelector} ({ev.xPct}%, {ev.yPct}%)</div>
+                    <div className="text-zinc-300 truncate">{ev.targetSelector} ({ev.xPct}%, {ev.yPct}%) {ev.maskedValue ? `· Value: ${ev.maskedValue}` : ''}</div>
                   </div>
                 ))}
               </div>
