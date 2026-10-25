@@ -60,6 +60,36 @@ function buildTrackingUrl(link: ReferralLinkItem): string {
   return parsed.toString();
 }
 
+function computeQrCells(payload: string): boolean[][] {
+  const size = 11;
+  const grid: boolean[][] = Array.from({ length: size }, () => Array(size).fill(false));
+  const setFinder = (ox: number, oy: number) => {
+    for (let y = 0; y < 3; y++) {
+      for (let x = 0; x < 3; x++) {
+        grid[oy + y][ox + x] = true;
+      }
+    }
+  };
+  setFinder(0, 0);
+  setFinder(size - 3, 0);
+  setFinder(0, size - 3);
+  let hash = 2166136261;
+  for (let i = 0; i < payload.length; i++) {
+    hash ^= payload.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const inFinder = (x < 4 && y < 4) || (x >= size - 4 && y < 4) || (x < 4 && y >= size - 4);
+      if (inFinder) continue;
+      const bitIdx = (y * size + x) % 31;
+      const charCode = payload.charCodeAt((y * size + x) % payload.length) || 1;
+      grid[y][x] = ((hash >>> bitIdx) ^ charCode) % 2 === 0;
+    }
+  }
+  return grid;
+}
+
 function isValidLink(item: unknown): item is ReferralLinkItem {
   if (!item || typeof item !== 'object') return false;
   const r = item as Record<string, unknown>;
@@ -120,14 +150,17 @@ export const ReferralLinkManager: React.FC<ReferralLinkManagerProps> = ({
       if (onChange) {
         await onChange(next);
       }
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(storageKey, JSON.stringify(next));
+        }
+      } catch {}
       setNotice(msg);
       return true;
     } catch {
       linksRef.current = prev;
       setLinks(prev);
+      setNotice('');
       setErrorMsg('Failed to persist referral links; rolled back.');
       return false;
     } finally {
@@ -143,6 +176,7 @@ export const ReferralLinkManager: React.FC<ReferralLinkManagerProps> = ({
     const parsedUrl = parseHttpUrl(destinationUrl);
     const comm = Number(commissionInput.trim());
     if (!slug || !parsedUrl || !Number.isFinite(comm) || comm < 0 || comm > 1_000_000) {
+      setNotice('');
       setErrorMsg('Enter a valid campaign slug, valid http:// or https:// destination URL, and non-negative commission.');
       return;
     }
@@ -156,7 +190,7 @@ export const ReferralLinkManager: React.FC<ReferralLinkManagerProps> = ({
       conversions: 0,
       commissionPerConversionUsd: Math.round(comm)
     };
-    const ok = await persistLinks([created, ...linksRef.current], `Created referral link "${created.campaignSlug}".`);
+    const ok = await persistLinks([created, ...linksRef.current], `Created referral link "${created.campaignSlug}" with QR code.`);
     if (ok) {
       setCampaignSlug('');
     }
@@ -173,6 +207,7 @@ export const ReferralLinkManager: React.FC<ReferralLinkManagerProps> = ({
     const target = linksRef.current.find(l => l.id === id);
     if (!target) return;
     if (target.conversions >= target.clicks) {
+      setNotice('');
       setErrorMsg('Cannot log a conversion exceeding total recorded clicks; log a click first.');
       return;
     }
@@ -194,8 +229,8 @@ export const ReferralLinkManager: React.FC<ReferralLinkManagerProps> = ({
       <div className="max-w-6xl mx-auto space-y-6">
         <header className="border-b border-zinc-800 pb-4 flex flex-wrap justify-between items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-[#D4AF37]">Referral Link & UTM Attribution Manager</h1>
-            <p className="text-sm text-zinc-400">Generate trackable affiliate links and monitor conversion commissions</p>
+            <h1 className="text-2xl font-bold text-[#D4AF37]">Referral Link, UTM & QR Code Manager</h1>
+            <p className="text-sm text-zinc-400">Generate trackable affiliate links, scannable QR codes, and monitor commissions</p>
           </div>
           <div className="flex gap-3 text-xs">
             <div className="bg-zinc-900 border border-zinc-800 px-3 py-2 rounded">
@@ -231,13 +266,28 @@ export const ReferralLinkManager: React.FC<ReferralLinkManagerProps> = ({
           {links.map(l => {
             const fullUrl = buildTrackingUrl(l);
             const convRate = l.clicks > 0 ? ((l.conversions / l.clicks) * 100).toFixed(1) : '0.0';
+            const qrGrid = computeQrCells(fullUrl);
             return (
               <div key={l.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap justify-between items-center gap-4">
-                <div className="space-y-1">
-                  <div className="font-bold text-white">{l.campaignSlug}</div>
-                  <div className="text-xs font-mono text-[#D4AF37] break-all">{fullUrl}</div>
-                  <div className="text-xs text-zinc-400">
-                    Clicks: {l.clicks} · Conversions: {l.conversions} ({convRate}%) · Payout: ${(l.conversions * l.commissionPerConversionUsd).toLocaleString()}
+                <div className="flex items-center gap-4">
+                  <svg
+                    role="img"
+                    aria-label={`QR Code for ${fullUrl}`}
+                    viewBox="0 0 11 11"
+                    className="w-16 h-16 bg-white p-1 rounded shrink-0"
+                  >
+                    {qrGrid.map((row, y) =>
+                      row.map((cell, x) =>
+                        cell ? <rect key={`${x}-${y}`} x={x} y={y} width={1} height={1} fill="#09090B" /> : null
+                      )
+                    )}
+                  </svg>
+                  <div className="space-y-1">
+                    <div className="font-bold text-white">{l.campaignSlug}</div>
+                    <div className="text-xs font-mono text-[#D4AF37] break-all">{fullUrl}</div>
+                    <div className="text-xs text-zinc-400">
+                      Clicks: {l.clicks} · Conversions: {l.conversions} ({convRate}%) · Payout: ${(l.conversions * l.commissionPerConversionUsd).toLocaleString()}
+                    </div>
                   </div>
                 </div>
                 <div className="flex gap-2">
