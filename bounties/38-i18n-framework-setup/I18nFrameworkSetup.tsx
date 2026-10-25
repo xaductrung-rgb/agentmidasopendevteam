@@ -132,7 +132,7 @@ export const I18nFrameworkSetup: React.FC<I18nFrameworkSetupProps> = ({
     const usedFallback = !found.values[locale]?.trim() && locale !== 'en-US';
 
     const withPlurals = raw.replace(
-      /\{\{(\w+),\s*plural,\s*zero\s*\{([^}]*)\}\s*one\s*\{([^}]*)\}\s*other\s*\{([^}]*)\}\}\}/g,
+      /\{\{(\w+),\s*plural,\s*zero\s*\{((?:\{\{[^}]*\}\}|[^{}])*)\}\s*one\s*\{((?:\{\{[^}]*\}\}|[^{}])*)\}\s*other\s*\{((?:\{\{[^}]*\}\}|[^{}])*)\}\}\}/g,
       (_, varName, zeroForm, oneForm, otherForm) => {
         const num = Number(vars[varName] ?? 0);
         const chosen = num === 0 ? zeroForm : num === 1 ? oneForm : otherForm;
