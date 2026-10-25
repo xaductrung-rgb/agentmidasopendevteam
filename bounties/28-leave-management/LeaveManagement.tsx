@@ -47,6 +47,14 @@ const DEFAULT_REQUESTS: LeaveRequestItem[] = [
   }
 ];
 
+function getLocalDateIso(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function isValidLeave(item: unknown): item is LeaveRequestItem {
   if (!item || typeof item !== 'object') return false;
   const l = item as Record<string, unknown>;
@@ -88,8 +96,8 @@ export const LeaveManagement: React.FC<LeaveManagementProps> = ({
   const [employeeName, setEmployeeName] = useState('');
   const [department, setDepartment] = useState('Platform Engineering');
   const [leaveType, setLeaveType] = useState<LeaveType>('Annual PTO');
-  const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [startDate, setStartDate] = useState(() => getLocalDateIso());
+  const [endDate, setEndDate] = useState(() => getLocalDateIso());
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [notice, setNotice] = useState('');
@@ -106,14 +114,17 @@ export const LeaveManagement: React.FC<LeaveManagementProps> = ({
       if (onChange) {
         await onChange(next);
       }
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      }
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(storageKey, JSON.stringify(next));
+        }
+      } catch {}
       setNotice(msg);
       return true;
     } catch {
       requestsRef.current = prev;
       setRequests(prev);
+      setNotice('');
       setErrorMsg('Failed to persist leave requests; rolled back.');
       return false;
     } finally {
@@ -128,6 +139,7 @@ export const LeaveManagement: React.FC<LeaveManagementProps> = ({
     const sTime = Date.parse(startDate);
     const eTime = Date.parse(endDate);
     if (!employeeName.trim() || !department.trim() || Number.isNaN(sTime) || Number.isNaN(eTime) || eTime < sTime) {
+      setNotice('');
       setErrorMsg('Employee name, department, and valid date range (end >= start) are required.');
       return;
     }
@@ -168,12 +180,16 @@ export const LeaveManagement: React.FC<LeaveManagementProps> = ({
         <header className="border-b border-zinc-800 pb-4 flex flex-wrap justify-between items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold text-[#D4AF37]">HR Leave & PTO Accrual Manager</h1>
-            <p className="text-sm text-zinc-400">Submit absence requests, track PTO balances, and process manager approvals</p>
+            <p className="text-sm text-zinc-400">Submit absence requests, track PTO balances, and view team leave calendar</p>
           </div>
           <div className="flex gap-3 text-xs">
             <div className="bg-zinc-900 border border-zinc-800 px-3 py-2 rounded">
               <div className="text-zinc-400">Approved PTO Used</div>
               <div className="text-base font-bold text-white">{stats.approvedDays} days</div>
+            </div>
+            <div className="bg-zinc-900 border border-zinc-800 px-3 py-2 rounded">
+              <div className="text-zinc-400">Remaining Annual PTO</div>
+              <div className="text-base font-bold text-emerald-400">{stats.remainingAllowance} days</div>
             </div>
             <div className="bg-zinc-900 border border-zinc-800 px-3 py-2 rounded">
               <div className="text-zinc-400">Pending Approvals</div>
@@ -197,6 +213,19 @@ export const LeaveManagement: React.FC<LeaveManagementProps> = ({
             + Request Leave
           </button>
         </form>
+
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3" aria-label="Team Leave Calendar View">
+          <h2 className="text-xs font-bold text-[#D4AF37] uppercase">Team Leave Schedule Calendar</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2">
+            {requests.map(req => (
+              <div key={`cal-${req.id}`} className="bg-zinc-950 border border-zinc-800 rounded p-2.5 text-xs">
+                <div className="font-mono text-[#D4AF37]">{req.startDate} → {req.endDate}</div>
+                <div className="font-bold text-white mt-0.5">{req.employeeName} ({req.daysRequested}d)</div>
+                <div className="text-zinc-400">{req.leaveType} · {req.status}</div>
+              </div>
+            ))}
+          </div>
+        </div>
 
         <div className="space-y-2">
           {requests.map(req => (
