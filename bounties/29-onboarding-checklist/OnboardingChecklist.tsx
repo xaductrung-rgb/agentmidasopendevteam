@@ -79,26 +79,29 @@ export function OnboardingChecklist({
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(storageKey);
-      if (saved) {
+      if (saved !== null) {
         const parsed: unknown = JSON.parse(saved);
-        if (isValidOnboardingList(parsed) && parsed.length > 0) {
+        if (isValidOnboardingList(parsed)) {
           setTasks(parsed);
+          return;
         }
       }
     } catch {
-      // ignore storage errors
+      // ignore storage read errors
     }
-  }, [storageKey]);
+    setTasks(initialTasks);
+  }, [storageKey, initialTasks]);
 
-  const persist = async (next: OnboardingTask[], fallback: OnboardingTask[]) => {
-    setTasks(next);
-    setError(null);
+  const persist = async (next: OnboardingTask[]): Promise<boolean> => {
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(next));
       await onChange?.(next);
+      window.localStorage.setItem(storageKey, JSON.stringify(next));
+      setTasks(next);
+      setError(null);
+      return true;
     } catch {
-      setTasks(fallback);
-      setError('Failed to save onboarding progress. Reverted to previous state.');
+      setError('Failed to save onboarding progress.');
+      return false;
     }
   };
 
@@ -115,9 +118,8 @@ export function OnboardingChecklist({
   );
 
   const toggleTask = async (id: string) => {
-    const prev = tasks;
     const next = tasks.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t));
-    await persist(next, prev);
+    await persist(next);
   };
 
   const handleAddTask = async (e: React.FormEvent) => {
@@ -133,9 +135,9 @@ export function OnboardingChecklist({
       ownerRole: ownerRole.trim(),
       completed: false
     };
-    const prev = tasks;
-    setTitle('');
-    await persist([...tasks, newTask], prev);
+    if (await persist([...tasks, newTask])) {
+      setTitle('');
+    }
   };
 
   return (
