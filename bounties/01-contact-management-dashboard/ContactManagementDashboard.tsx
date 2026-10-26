@@ -42,7 +42,7 @@ const DEFAULT_CONTACTS: ContactRecord[] = [
   {
     id: 'ct-3',
     fullName: 'Sophia Chen',
-    email: 'schen@GrowthPartner.org',
+    email: 'schen@growthpartner.org',
     company: 'GrowthPartner Media',
     stage: 'Partner',
     tags: ['affiliate', 'two-up'],
@@ -90,26 +90,29 @@ export function ContactManagementDashboard({
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(storageKey);
-      if (saved) {
+      if (saved !== null) {
         const parsed: unknown = JSON.parse(saved);
-        if (isValidContactList(parsed) && parsed.length > 0) {
+        if (isValidContactList(parsed)) {
           setContacts(parsed);
+          return;
         }
       }
     } catch {
-      // ignore storage errors
+      // ignore storage read errors
     }
-  }, [storageKey]);
+    setContacts(initialContacts);
+  }, [storageKey, initialContacts]);
 
-  const commitContacts = async (next: ContactRecord[], fallback: ContactRecord[]) => {
-    setContacts(next);
-    setError(null);
+  const commitContacts = async (next: ContactRecord[]): Promise<boolean> => {
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(next));
       await onChange?.(next);
+      window.localStorage.setItem(storageKey, JSON.stringify(next));
+      setContacts(next);
+      setError(null);
+      return true;
     } catch {
-      setContacts(fallback);
-      setError('Failed to persist contact changes. Reverted to previous state.');
+      setError('Failed to persist contact changes.');
+      return false;
     }
   };
 
@@ -159,16 +162,16 @@ export function ContactManagementDashboard({
       lifetimeValueUsd: Math.round(ltv)
     };
 
-    const prev = contacts;
     const next = editingId
       ? contacts.map((item) => (item.id === editingId ? record : item))
       : [record, ...contacts];
 
-    setFullName('');
-    setEmail('');
-    setCompany('');
-    setEditingId(null);
-    await commitContacts(next, prev);
+    if (await commitContacts(next)) {
+      setFullName('');
+      setEmail('');
+      setCompany('');
+      setEditingId(null);
+    }
   };
 
   const startEdit = (c: ContactRecord) => {
@@ -183,9 +186,8 @@ export function ContactManagementDashboard({
   };
 
   const deleteContact = async (id: string) => {
-    const prev = contacts;
     const next = contacts.filter((c) => c.id !== id);
-    await commitContacts(next, prev);
+    await commitContacts(next);
   };
 
   const totalPipelineUsd = useMemo(
