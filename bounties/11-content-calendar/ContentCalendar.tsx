@@ -74,31 +74,35 @@ export function ContentCalendar({
   const [channel, setChannel] = useState<ContentCalendarItem['channel']>('Blog');
   const [assignee, setAssignee] = useState('');
   const [dueDate, setDueDate] = useState('2026-11-12');
+  const [draggedId, setDraggedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(storageKey);
-      if (saved) {
+      if (saved !== null) {
         const parsed: unknown = JSON.parse(saved);
-        if (isValidCalendarList(parsed) && parsed.length > 0) {
+        if (isValidCalendarList(parsed)) {
           setItems(parsed);
+          return;
         }
       }
     } catch {
-      // ignore storage errors
+      // ignore storage read errors
     }
-  }, [storageKey]);
+    setItems(initialItems);
+  }, [storageKey, initialItems]);
 
-  const persist = async (next: ContentCalendarItem[], fallback: ContentCalendarItem[]) => {
-    setItems(next);
-    setError(null);
+  const persist = async (next: ContentCalendarItem[]): Promise<boolean> => {
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(next));
       await onChange?.(next);
+      window.localStorage.setItem(storageKey, JSON.stringify(next));
+      setItems(next);
+      setError(null);
+      return true;
     } catch {
-      setItems(fallback);
-      setError('Unable to save content calendar update. Reverted changes.');
+      setError('Unable to save content calendar update.');
+      return false;
     }
   };
 
@@ -108,9 +112,8 @@ export function ContentCalendar({
   );
 
   const advanceStage = async (id: string, nextStage: CalendarStage) => {
-    const prev = items;
     const next = items.map((i) => (i.id === id ? { ...i, stage: nextStage } : i));
-    await persist(next, prev);
+    await persist(next);
   };
 
   const handleAdd = async (e: React.FormEvent) => {
@@ -127,10 +130,10 @@ export function ContentCalendar({
       dueDate,
       stage: 'Idea'
     };
-    const prev = items;
-    setTitle('');
-    setAssignee('');
-    await persist([newItem, ...items], prev);
+    if (await persist([newItem, ...items])) {
+      setTitle('');
+      setAssignee('');
+    }
   };
 
   return (
@@ -139,7 +142,7 @@ export function ContentCalendar({
         <div>
           <h2 className="text-2xl font-bold text-slate-900">Editorial Content Calendar</h2>
           <p className="text-sm text-slate-600">
-            Coordinate multi-channel campaigns across workflow stages with team assignments.
+            Drag and drop campaign cards across workflow stages or use keyboard stage selectors.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -214,7 +217,17 @@ export function ContentCalendar({
         {STAGES.map((stage) => {
           const columnItems = filtered.filter((i) => i.stage === stage);
           return (
-            <div key={stage} className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+            <div
+              key={stage}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => {
+                if (draggedId) {
+                  void advanceStage(draggedId, stage);
+                  setDraggedId(null);
+                }
+              }}
+              className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-3 min-h-[220px]"
+            >
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">{stage}</h3>
                 <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
@@ -223,11 +236,17 @@ export function ContentCalendar({
               </div>
               {columnItems.length === 0 ? (
                 <div className="p-4 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-lg">
-                  No items in {stage}
+                  Drop card here or add to {stage}
                 </div>
               ) : (
                 columnItems.map((item) => (
-                  <div key={item.id} className="p-3 bg-white rounded-lg border border-slate-200 shadow-sm space-y-2">
+                  <div
+                    key={item.id}
+                    draggable
+                    onDragStart={() => setDraggedId(item.id)}
+                    onDragEnd={() => setDraggedId(null)}
+                    className="p-3 bg-white rounded-lg border border-slate-200 shadow-sm space-y-2 cursor-grab active:cursor-grabbing"
+                  >
                     <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-indigo-50 text-indigo-700">
                       {item.channel}
                     </span>
