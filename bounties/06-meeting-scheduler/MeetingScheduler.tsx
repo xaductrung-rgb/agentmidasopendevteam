@@ -21,6 +21,13 @@ export interface MeetingSchedulerProps {
 
 const TIME_SLOTS = ['09:00', '10:00', '11:00', '13:30', '15:00', '16:30'];
 
+const TZ_OFFSET_MINUTES: Record<string, number> = {
+  'America/New_York': -300,
+  'America/Los_Angeles': -480,
+  'Europe/London': 0,
+  UTC: 0
+};
+
 const DEFAULT_MEETINGS: ScheduledMeeting[] = [
   {
     id: 'mtg-1',
@@ -55,9 +62,24 @@ function isValidMeetingList(val: unknown): val is ScheduledMeeting[] {
         typeof (m as ScheduledMeeting).clientName === 'string' &&
         typeof (m as ScheduledMeeting).clientEmail === 'string' &&
         typeof (m as ScheduledMeeting).date === 'string' &&
-        typeof (m as ScheduledMeeting).slot === 'string'
+        typeof (m as ScheduledMeeting).slot === 'string' &&
+        typeof (m as ScheduledMeeting).durationMinutes === 'number' &&
+        typeof (m as ScheduledMeeting).timezone === 'string'
     )
   );
+}
+
+function toUtcInterval(date: string, slot: string, durationMinutes: number, tz: string): [number, number] {
+  const [hStr, mStr] = slot.split(':');
+  const localMins = Number(hStr) * 60 + Number(mStr);
+  const offset = TZ_OFFSET_MINUTES[tz] ?? 0;
+  const dayEpochMins = Math.floor(Date.parse(`${date}T00:00:00Z`) / 60000);
+  const startUtc = dayEpochMins + localMins - offset;
+  return [startUtc, startUtc + durationMinutes];
+}
+
+function intervalsOverlap(a: [number, number], b: [number, number]): boolean {
+  return a[0] < b[1] && b[0] < a[1];
 }
 
 export function MeetingScheduler({
@@ -78,31 +100,38 @@ export function MeetingScheduler({
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(storageKey);
-      if (saved) {
+      if (saved !== null) {
         const parsed: unknown = JSON.parse(saved);
-        if (isValidMeetingList(parsed) && parsed.length > 0) {
+        if (isValidMeetingList(parsed)) {
           setMeetings(parsed);
+          return;
         }
       }
     } catch {
-      // ignore storage errors
+      // ignore storage read errors
     }
-  }, [storageKey]);
+    setMeetings(initialMeetings);
+  }, [storageKey, initialMeetings]);
 
-  const bookedSlotsForDate = useMemo(
-    () => new Set(meetings.filter((m) => m.date === selectedDate).map((m) => m.slot)),
-    [meetings, selectedDate]
-  );
+  const hasConflict = useMemo(() => {
+    return (slot: string) => {
+      const candidate = toUtcInterval(selectedDate, slot, durationMinutes, timezone);
+      return meetings.some((m) =>
+        intervalsOverlap(candidate, toUtcInterval(m.date, m.slot, m.durationMinutes, m.timezone))
+      );
+    };
+  }, [meetings, selectedDate, durationMinutes, timezone]);
 
-  const persistMeetings = async (next: ScheduledMeeting[], fallback: ScheduledMeeting[]) => {
-    setMeetings(next);
-    setError(null);
+  const persistMeetings = async (next: ScheduledMeeting[]): Promise<boolean> => {
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(next));
       await onChange?.(next);
+      window.localStorage.setItem(storageKey, JSON.stringify(next));
+      setMeetings(next);
+      setError(null);
+      return true;
     } catch {
-      setMeetings(fallback);
-      setError('Could not save meeting update. Reverted to previous schedule.');
+      setError('Could not save meeting update.');
+      return false;
     }
   };
 
@@ -116,8 +145,8 @@ export function MeetingScheduler({
       setError('Please provide a valid client name, email, and meeting date.');
       return;
     }
-    if (bookedSlotsForDate.has(selectedSlot)) {
-      setError('Selected time slot is already booked for this date. Please pick another slot.');
+    if (hasConflict(selectedSlot)) {
+      setError('Selected time slot overlaps an existing booking. Please pick another slot.');
       return;
     }
 
@@ -132,20 +161,16 @@ export function MeetingScheduler({
       topic: cleanTopic
     };
 
-    const prev = meetings;
     const next = [...meetings, newMeeting];
-    setClientName('');
-    setClientEmail('');
-    setTopic('');
-    await persistMeetings(next, prev);
+    if (await persistMeetings(next)) {
+      setClientName('');
+      setClientEmail('');
+      setTopic('');
+    }
   };
 
   const cancelMeeting = async (id: string) => {
-    const prev = meetings;
-    await persistMeetings(
-      meetings.filter((m) => m.id !== id),
-      prev
-    );
+    await persistMeetings(meetings.filter((m) => m.id !== id));
   };
 
   return (
@@ -153,7 +178,7 @@ export function MeetingScheduler({
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-slate-900">Client Meeting Scheduler</h2>
         <p className="text-sm text-slate-600">
-          Book conflict-free client sessions with timezone alignment and instant slot availability.
+          Book conflict-free client sessions with UTC interval overlap checks and timezone alignment.
         </p>
       </div>
 
@@ -201,7 +226,7 @@ export function MeetingScheduler({
             <span className="block text-xs font-semibold text-slate-600 mb-1">Available Time Slots</span>
             <div className="grid grid-cols-3 gap-2">
               {TIME_SLOTS.map((slot) => {
-                const isBooked = bookedSlotsForDate.has(slot);
+                const isBooked = hasConflict(slot);
                 const isSelected = selectedSlot === slot;
                 return (
                   <button
@@ -218,7 +243,7 @@ export function MeetingScheduler({
                         : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
                     }`}
                   >
-                    {slot} {isBooked ? '(Booked)' : ''}
+                    {slot} {isBooked ? '(Conflict)' : ''}
                   </button>
                 );
               })}
