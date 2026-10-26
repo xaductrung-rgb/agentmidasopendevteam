@@ -73,26 +73,29 @@ export function FaqManager({
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(storageKey);
-      if (saved) {
+      if (saved !== null) {
         const parsed: unknown = JSON.parse(saved);
-        if (isValidFaqList(parsed) && parsed.length > 0) {
+        if (isValidFaqList(parsed)) {
           setFaqs(parsed);
+          return;
         }
       }
     } catch {
-      // ignore storage errors
+      // ignore storage read errors
     }
-  }, [storageKey]);
+    setFaqs(initialFaqs);
+  }, [storageKey, initialFaqs]);
 
-  const persist = async (next: FaqEntry[], fallback: FaqEntry[]) => {
-    setFaqs(next);
-    setError(null);
+  const persist = async (next: FaqEntry[]): Promise<boolean> => {
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(next));
       await onChange?.(next);
+      window.localStorage.setItem(storageKey, JSON.stringify(next));
+      setFaqs(next);
+      setError(null);
+      return true;
     } catch {
-      setFaqs(fallback);
-      setError('Failed to save FAQ changes. Reverted to previous state.');
+      setError('Failed to save FAQ changes.');
+      return false;
     }
   };
 
@@ -106,9 +109,8 @@ export function FaqManager({
   }, [faqs, search, category]);
 
   const voteHelpful = async (id: string) => {
-    const prev = faqs;
     const next = faqs.map((f) => (f.id === id ? { ...f, helpfulCount: f.helpfulCount + 1 } : f));
-    await persist(next, prev);
+    await persist(next);
   };
 
   const handleAddFaq = async (e: React.FormEvent) => {
@@ -124,10 +126,10 @@ export function FaqManager({
       category: newCategory,
       helpfulCount: 0
     };
-    const prev = faqs;
-    setQuestion('');
-    setAnswer('');
-    await persist([entry, ...faqs], prev);
+    if (await persist([entry, ...faqs])) {
+      setQuestion('');
+      setAnswer('');
+    }
   };
 
   return (
