@@ -92,16 +92,18 @@ export function BlogPublishingSystem({
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(storageKey);
-      if (saved) {
+      if (saved !== null) {
         const parsed: unknown = JSON.parse(saved);
-        if (isValidPostList(parsed) && parsed.length > 0) {
+        if (isValidPostList(parsed)) {
           setPosts(parsed);
+          return;
         }
       }
     } catch {
-      // ignore storage errors
+      // ignore storage read errors
     }
-  }, [storageKey]);
+    setPosts(initialPosts);
+  }, [storageKey, initialPosts]);
 
   const liveSeoScore = useMemo(
     () => computeSeoScore(title, excerpt, body, targetKeyword),
@@ -139,20 +141,18 @@ export function BlogPublishingSystem({
       views: 0
     };
 
-    const prev = posts;
     const next = [nextPost, ...posts];
-    setPosts(next);
-    setError(null);
-    setTitle('');
-    setExcerpt('');
-    setBody('');
-    setTargetKeyword('');
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(next));
       await onChange?.(next);
+      window.localStorage.setItem(storageKey, JSON.stringify(next));
+      setPosts(next);
+      setError(null);
+      setTitle('');
+      setExcerpt('');
+      setBody('');
+      setTargetKeyword('');
     } catch {
-      setPosts(prev);
-      setError('Failed to save blog post. Reverted changes.');
+      setError('Failed to save blog post.');
     }
   };
 
