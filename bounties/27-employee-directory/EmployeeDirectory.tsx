@@ -83,16 +83,18 @@ export function EmployeeDirectory({
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(storageKey);
-      if (saved) {
+      if (saved !== null) {
         const parsed: unknown = JSON.parse(saved);
-        if (isValidEmployeeList(parsed) && parsed.length > 0) {
+        if (isValidEmployeeList(parsed)) {
           setEmployees(parsed);
+          return;
         }
       }
     } catch {
-      // ignore storage errors
+      // ignore storage read errors
     }
-  }, [storageKey]);
+    setEmployees(initialEmployees);
+  }, [storageKey, initialEmployees]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -107,6 +109,17 @@ export function EmployeeDirectory({
       );
     });
   }, [employees, search, department]);
+
+  const orgGroups = useMemo(() => {
+    const map = new Map<string, EmployeeProfile[]>();
+    for (const emp of filtered) {
+      const mgr = emp.managerName || 'Executive Leadership';
+      const list = map.get(mgr) ?? [];
+      list.push(emp);
+      map.set(mgr, list);
+    }
+    return Array.from(map.entries());
+  }, [filtered]);
 
   const handleAddEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -123,19 +136,17 @@ export function EmployeeDirectory({
       location: location.trim() || 'Remote',
       email: email.trim()
     };
-    const prev = employees;
     const next = [...employees, nextEmp];
-    setEmployees(next);
-    setError(null);
-    setFullName('');
-    setRoleTitle('');
-    setEmail('');
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(next));
       await onChange?.(next);
+      window.localStorage.setItem(storageKey, JSON.stringify(next));
+      setEmployees(next);
+      setError(null);
+      setFullName('');
+      setRoleTitle('');
+      setEmail('');
     } catch {
-      setEmployees(prev);
-      setError('Failed to save employee record. Reverted to previous directory.');
+      setError('Failed to save employee record.');
     }
   };
 
@@ -145,7 +156,7 @@ export function EmployeeDirectory({
         <div>
           <h2 className="text-2xl font-bold text-slate-900">Employee Directory &amp; Org Hierarchy</h2>
           <p className="text-sm text-slate-600">
-            Browse team member profiles, reporting lines, and department distributions.
+            Browse team member profiles grouped by reporting manager and department.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -185,26 +196,37 @@ export function EmployeeDirectory({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {filtered.length === 0 ? (
-            <div className="col-span-full p-8 text-center text-sm text-slate-500 border border-dashed border-slate-300 rounded-xl">
+        <div className="lg:col-span-2 space-y-4">
+          {orgGroups.length === 0 ? (
+            <div className="p-8 text-center text-sm text-slate-500 border border-dashed border-slate-300 rounded-xl">
               No team members match your search criteria.
             </div>
           ) : (
-            filtered.map((emp) => (
-              <div key={emp.id} className="p-4 rounded-xl border border-slate-200 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-sm text-slate-900">{emp.fullName}</span>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-medium">
-                    {emp.department}
+            orgGroups.map(([manager, directReports]) => (
+              <div key={manager} className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-indigo-700">
+                    Reporting Line: {manager}
+                  </span>
+                  <span className="text-xs font-semibold text-slate-600">
+                    {directReports.length} direct report(s)
                   </span>
                 </div>
-                <div className="text-xs font-semibold text-slate-700">{emp.roleTitle}</div>
-                <div className="text-xs text-slate-500">
-                  Reports to: <span className="font-medium text-slate-700">{emp.managerName}</span>
-                </div>
-                <div className="text-xs text-slate-500">
-                  {emp.location} &bull; {emp.email}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pl-3 border-l-2 border-indigo-300">
+                  {directReports.map((emp) => (
+                    <div key={emp.id} className="p-3 bg-white rounded-lg border border-slate-200 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-sm text-slate-900">{emp.fullName}</span>
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-medium">
+                          {emp.department}
+                        </span>
+                      </div>
+                      <div className="text-xs font-semibold text-slate-700">{emp.roleTitle}</div>
+                      <div className="text-xs text-slate-500">
+                        {emp.location} &bull; {emp.email}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             ))
