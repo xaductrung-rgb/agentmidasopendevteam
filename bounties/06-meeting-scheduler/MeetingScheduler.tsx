@@ -57,13 +57,14 @@ function isValidMeetingList(val: unknown): val is ScheduledMeeting[] {
         typeof (m as ScheduledMeeting).date === 'string' &&
         typeof (m as ScheduledMeeting).slot === 'string' &&
         typeof (m as ScheduledMeeting).durationMinutes === 'number' &&
-        typeof (m as ScheduledMeeting).timezone === 'string'
+        typeof (m as ScheduledMeeting).timezone === 'string' &&
+        typeof (m as ScheduledMeeting).topic === 'string'
     )
   );
 }
 
 function parseUtcOffsetMinutes(tz: string): number {
-  const m = tz.match(/^UTC([+-])(d{2}):(d{2})$/);
+  const m = tz.match(/^UTC([+-])(\d{2}):(\d{2})$/);
   if (!m) return 0;
   const sign = m[1] === '-' ? -1 : 1;
   return sign * (Number(m[2]) * 60 + Number(m[3]));
