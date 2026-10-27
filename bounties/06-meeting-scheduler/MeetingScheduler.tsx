@@ -96,6 +96,7 @@ export function MeetingScheduler({
   const [clientEmail, setClientEmail] = useState('');
   const [topic, setTopic] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     try {
@@ -123,6 +124,8 @@ export function MeetingScheduler({
   }, [meetings, selectedDate, durationMinutes, timezone]);
 
   const persistMeetings = async (next: ScheduledMeeting[]): Promise<boolean> => {
+    if (isSaving) return false;
+    setIsSaving(true);
     try {
       await onChange?.(next);
       window.localStorage.setItem(storageKey, JSON.stringify(next));
@@ -132,6 +135,8 @@ export function MeetingScheduler({
     } catch {
       setError('Could not save meeting update.');
       return false;
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -143,6 +148,11 @@ export function MeetingScheduler({
 
     if (!cleanName || !cleanEmail.includes('@') || !selectedDate) {
       setError('Please provide a valid client name, email, and meeting date.');
+      return;
+    }
+    const [startUtc] = toUtcInterval(selectedDate, selectedSlot, durationMinutes, timezone);
+    if (startUtc < Math.floor(Date.now() / 60000)) {
+      setError('Please select a future date and time.');
       return;
     }
     if (hasConflict(selectedSlot)) {
