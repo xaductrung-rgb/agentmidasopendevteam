@@ -55,8 +55,12 @@ function isValidMeetingList(val: unknown): val is ScheduledMeeting[] {
         typeof (m as ScheduledMeeting).clientName === 'string' &&
         typeof (m as ScheduledMeeting).clientEmail === 'string' &&
         typeof (m as ScheduledMeeting).date === 'string' &&
+        /^\d{4}-\d{2}-\d{2}$/.test((m as ScheduledMeeting).date) &&
         typeof (m as ScheduledMeeting).slot === 'string' &&
+        /^\d{2}:\d{2}$/.test((m as ScheduledMeeting).slot) &&
         typeof (m as ScheduledMeeting).durationMinutes === 'number' &&
+        Number.isFinite((m as ScheduledMeeting).durationMinutes) &&
+        (m as ScheduledMeeting).durationMinutes > 0 &&
         typeof (m as ScheduledMeeting).timezone === 'string' &&
         typeof (m as ScheduledMeeting).topic === 'string'
     )
@@ -134,22 +138,15 @@ export function MeetingScheduler({
     setMeetings(initialMeetings);
   }, [storageKey, initialMeetings]);
 
-  const upcomingMeetings = useMemo(() => {
-    const nowMins = Math.floor(Date.now() / 60000);
-    return meetings.filter((m) => {
-      const [, endUtc] = toUtcInterval(m.date, m.slot, m.durationMinutes, m.timezone);
-      return endUtc > nowMins;
-    });
-  }, [meetings]);
-
   const hasConflict = useMemo(() => {
     return (slot: string) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) return false;
       const candidate = toUtcInterval(selectedDate, slot, durationMinutes, timezone);
-      return upcomingMeetings.some((m) =>
+      return meetings.some((m) =>
         intervalsOverlap(candidate, toUtcInterval(m.date, m.slot, m.durationMinutes, m.timezone))
       );
     };
-  }, [upcomingMeetings, selectedDate, durationMinutes, timezone]);
+  }, [meetings, selectedDate, durationMinutes, timezone]);
 
   const persistMeetings = async (next: ScheduledMeeting[]): Promise<boolean> => {
     if (isSaving) return false;
@@ -174,7 +171,7 @@ export function MeetingScheduler({
     const cleanEmail = clientEmail.trim();
     const cleanTopic = topic.trim() || 'Discovery & Strategy Session';
 
-    if (!cleanName || !cleanEmail.includes('@') || !selectedDate) {
+    if (!cleanName || !cleanEmail.includes('@') || !/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) {
       setError('Please provide a valid client name, email, and meeting date.');
       return;
     }
@@ -227,120 +224,122 @@ export function MeetingScheduler({
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <form onSubmit={handleBook} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
-          <h3 className="text-sm font-bold text-slate-900">Book a Session</h3>
-          <div className="grid grid-cols-2 gap-3">
+        <form onSubmit={handleBook} className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+          <fieldset disabled={isSaving} className="space-y-3">
+            <h3 className="text-sm font-bold text-slate-900">Book a Session</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label htmlFor="mtg-date" className="block text-xs font-semibold text-slate-600 mb-1">
+                  Date
+                </label>
+                <input
+                  id="mtg-date"
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
+                />
+              </div>
+              <div>
+                <label htmlFor="mtg-tz" className="block text-xs font-semibold text-slate-600 mb-1">
+                  Timezone
+                </label>
+                <select
+                  id="mtg-tz"
+                  value={timezone}
+                  onChange={(e) => setTimezone(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
+                >
+                  <option value="America/New_York">America/New_York</option>
+                  <option value="America/Los_Angeles">America/Los_Angeles</option>
+                  <option value="Europe/London">Europe/London</option>
+                  <option value="UTC">UTC</option>
+                </select>
+              </div>
+            </div>
+
             <div>
-              <label htmlFor="mtg-date" className="block text-xs font-semibold text-slate-600 mb-1">
-                Date
-              </label>
-              <input
-                id="mtg-date"
-                type="date"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
-              />
+              <span className="block text-xs font-semibold text-slate-600 mb-1">Available Time Slots</span>
+              <div className="grid grid-cols-3 gap-2">
+                {TIME_SLOTS.map((slot) => {
+                  const isBooked = hasConflict(slot);
+                  const isSelected = selectedSlot === slot;
+                  return (
+                    <button
+                      key={slot}
+                      type="button"
+                      disabled={isBooked || isSaving}
+                      aria-pressed={isSelected}
+                      onClick={() => setSelectedSlot(slot)}
+                      className={`py-2 rounded-lg text-xs font-semibold border ${
+                        isBooked
+                          ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                          : isSelected
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      {slot} {isBooked ? '(Conflict)' : ''}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            <div>
-              <label htmlFor="mtg-tz" className="block text-xs font-semibold text-slate-600 mb-1">
-                Timezone
-              </label>
-              <select
-                id="mtg-tz"
-                value={timezone}
-                onChange={(e) => setTimezone(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
-              >
-                <option value="America/New_York">America/New_York</option>
-                <option value="America/Los_Angeles">America/Los_Angeles</option>
-                <option value="Europe/London">Europe/London</option>
-                <option value="UTC">UTC</option>
-              </select>
-            </div>
-          </div>
 
-          <div>
-            <span className="block text-xs font-semibold text-slate-600 mb-1">Available Time Slots</span>
-            <div className="grid grid-cols-3 gap-2">
-              {TIME_SLOTS.map((slot) => {
-                const isBooked = hasConflict(slot);
-                const isSelected = selectedSlot === slot;
-                return (
-                  <button
-                    key={slot}
-                    type="button"
-                    disabled={isBooked || isSaving}
-                    aria-pressed={isSelected}
-                    onClick={() => setSelectedSlot(slot)}
-                    className={`py-2 rounded-lg text-xs font-semibold border ${
-                      isBooked
-                        ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                        : isSelected
-                        ? 'bg-indigo-600 text-white border-indigo-600'
-                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    {slot} {isBooked ? '(Conflict)' : ''}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+            <select
+              aria-label="Meeting duration in minutes"
+              value={durationMinutes}
+              onChange={(e) => setDurationMinutes(Number(e.target.value))}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
+            >
+              <option value={15}>15 Minutes</option>
+              <option value={30}>30 Minutes</option>
+              <option value={45}>45 Minutes</option>
+              <option value={60}>60 Minutes</option>
+            </select>
 
-          <select
-            aria-label="Meeting duration in minutes"
-            value={durationMinutes}
-            onChange={(e) => setDurationMinutes(Number(e.target.value))}
-            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
-          >
-            <option value={15}>15 Minutes</option>
-            <option value={30}>30 Minutes</option>
-            <option value={45}>45 Minutes</option>
-            <option value={60}>60 Minutes</option>
-          </select>
-
-          <input
-            type="text"
-            aria-label="Client full name"
-            placeholder="Client Full Name"
-            value={clientName}
-            onChange={(e) => setClientName(e.target.value)}
-            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
-          />
-          <input
-            type="email"
-            aria-label="Client email address"
-            placeholder="Client Email Address"
-            value={clientEmail}
-            onChange={(e) => setClientEmail(e.target.value)}
-            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
-          />
-          <input
-            type="text"
-            aria-label="Meeting topic"
-            placeholder="Agenda / Topic"
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
-          />
-          <button
-            type="submit"
-            disabled={isSaving}
-            className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold rounded-lg text-sm"
-          >
-            {isSaving ? 'Saving...' : 'Confirm Booking'}
-          </button>
+            <input
+              type="text"
+              aria-label="Client full name"
+              placeholder="Client Full Name"
+              value={clientName}
+              onChange={(e) => setClientName(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
+            />
+            <input
+              type="email"
+              aria-label="Client email address"
+              placeholder="Client Email Address"
+              value={clientEmail}
+              onChange={(e) => setClientEmail(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
+            />
+            <input
+              type="text"
+              aria-label="Meeting topic"
+              placeholder="Agenda / Topic"
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
+            />
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold rounded-lg text-sm"
+            >
+              {isSaving ? 'Saving...' : 'Confirm Booking'}
+            </button>
+          </fieldset>
         </form>
 
         <div className="space-y-3">
-          <h3 className="text-sm font-bold text-slate-900">Upcoming Bookings ({upcomingMeetings.length})</h3>
-          {upcomingMeetings.length === 0 ? (
+          <h3 className="text-sm font-bold text-slate-900">Booked Sessions ({meetings.length})</h3>
+          {meetings.length === 0 ? (
             <div className="p-8 text-center text-sm text-slate-500 border border-dashed border-slate-300 rounded-xl">
-              No upcoming meetings scheduled.
+              No sessions booked yet.
             </div>
           ) : (
-            upcomingMeetings.map((m) => (
+            meetings.map((m) => (
               <div
                 key={m.id}
                 className="p-4 rounded-xl border border-slate-200 flex items-center justify-between gap-3"
