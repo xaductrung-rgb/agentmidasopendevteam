@@ -26,20 +26,20 @@ const DEFAULT_MEETINGS: ScheduledMeeting[] = [
     id: 'mtg-1',
     clientName: 'Liam Donovan',
     clientEmail: 'liam@horizonventures.io',
-    date: '2026-11-02',
+    date: '2027-11-02',
     slot: '10:00',
     durationMinutes: 30,
-    timezone: 'UTC-05:00',
+    timezone: 'America/New_York',
     topic: 'Enterprise Two-Up Affiliate Onboarding'
   },
   {
     id: 'mtg-2',
     clientName: 'Nadia Al-Mansoor',
     clientEmail: 'nadia@solarisdigital.ae',
-    date: '2026-11-02',
+    date: '2027-11-02',
     slot: '15:00',
     durationMinutes: 45,
-    timezone: 'UTC+00:00',
+    timezone: 'UTC',
     topic: 'Q4 Funnel Conversion Audit'
   }
 ];
@@ -63,19 +63,38 @@ function isValidMeetingList(val: unknown): val is ScheduledMeeting[] {
   );
 }
 
-function parseUtcOffsetMinutes(tz: string): number {
-  const m = tz.match(/^UTC([+-])(\d{2}):(\d{2})$/);
-  if (!m) return 0;
-  const sign = m[1] === '-' ? -1 : 1;
-  return sign * (Number(m[2]) * 60 + Number(m[3]));
+function zonedWallTimeToUtcMinutes(date: string, slot: string, tz: string): number {
+  const [y, mo, d] = date.split('-').map(Number);
+  const [h, mi] = slot.split(':').map(Number);
+  const guessUtcMs = Date.UTC(y, mo - 1, d, h, mi, 0);
+  try {
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23'
+    });
+    const parts = Object.fromEntries(fmt.formatToParts(new Date(guessUtcMs)).map((p) => [p.type, p.value]));
+    const zonedAsUtcMs = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      0
+    );
+    const offsetMs = zonedAsUtcMs - guessUtcMs;
+    return Math.floor((guessUtcMs - offsetMs) / 60000);
+  } catch {
+    return Math.floor(guessUtcMs / 60000);
+  }
 }
 
 function toUtcInterval(date: string, slot: string, durationMinutes: number, tz: string): [number, number] {
-  const [hStr, mStr] = slot.split(':');
-  const localMins = Number(hStr) * 60 + Number(mStr);
-  const offset = parseUtcOffsetMinutes(tz);
-  const dayEpochMins = Math.floor(Date.parse(`${date}T00:00:00Z`) / 60000);
-  const startUtc = dayEpochMins + localMins - offset;
+  const startUtc = zonedWallTimeToUtcMinutes(date, slot, tz);
   return [startUtc, startUtc + durationMinutes];
 }
 
@@ -89,10 +108,10 @@ export function MeetingScheduler({
   onChange
 }: MeetingSchedulerProps) {
   const [meetings, setMeetings] = useState<ScheduledMeeting[]>(initialMeetings);
-  const [selectedDate, setSelectedDate] = useState('2026-11-02');
+  const [selectedDate, setSelectedDate] = useState('2027-11-02');
   const [selectedSlot, setSelectedSlot] = useState('11:00');
   const [durationMinutes, setDurationMinutes] = useState(30);
-  const [timezone, setTimezone] = useState('UTC-05:00');
+  const [timezone, setTimezone] = useState('America/New_York');
   const [clientName, setClientName] = useState('');
   const [clientEmail, setClientEmail] = useState('');
   const [topic, setTopic] = useState('');
@@ -115,14 +134,22 @@ export function MeetingScheduler({
     setMeetings(initialMeetings);
   }, [storageKey, initialMeetings]);
 
+  const upcomingMeetings = useMemo(() => {
+    const nowMins = Math.floor(Date.now() / 60000);
+    return meetings.filter((m) => {
+      const [, endUtc] = toUtcInterval(m.date, m.slot, m.durationMinutes, m.timezone);
+      return endUtc > nowMins;
+    });
+  }, [meetings]);
+
   const hasConflict = useMemo(() => {
     return (slot: string) => {
       const candidate = toUtcInterval(selectedDate, slot, durationMinutes, timezone);
-      return meetings.some((m) =>
+      return upcomingMeetings.some((m) =>
         intervalsOverlap(candidate, toUtcInterval(m.date, m.slot, m.durationMinutes, m.timezone))
       );
     };
-  }, [meetings, selectedDate, durationMinutes, timezone]);
+  }, [upcomingMeetings, selectedDate, durationMinutes, timezone]);
 
   const persistMeetings = async (next: ScheduledMeeting[]): Promise<boolean> => {
     if (isSaving) return false;
@@ -189,7 +216,7 @@ export function MeetingScheduler({
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-slate-900">Client Meeting Scheduler</h2>
         <p className="text-sm text-slate-600">
-          Book conflict-free client sessions with UTC interval overlap checks and explicit offset alignment.
+          Book conflict-free client sessions with DST-aware IANA timezone conversion.
         </p>
       </div>
 
@@ -217,7 +244,7 @@ export function MeetingScheduler({
             </div>
             <div>
               <label htmlFor="mtg-tz" className="block text-xs font-semibold text-slate-600 mb-1">
-                UTC Offset
+                Timezone
               </label>
               <select
                 id="mtg-tz"
@@ -225,10 +252,10 @@ export function MeetingScheduler({
                 onChange={(e) => setTimezone(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
               >
-                <option value="UTC-05:00">UTC-05:00 (US Eastern)</option>
-                <option value="UTC-08:00">UTC-08:00 (US Pacific)</option>
-                <option value="UTC+00:00">UTC+00:00 (UTC / GMT)</option>
-                <option value="UTC+07:00">UTC+07:00 (ICT)</option>
+                <option value="America/New_York">America/New_York</option>
+                <option value="America/Los_Angeles">America/Los_Angeles</option>
+                <option value="Europe/London">Europe/London</option>
+                <option value="UTC">UTC</option>
               </select>
             </div>
           </div>
@@ -307,13 +334,13 @@ export function MeetingScheduler({
         </form>
 
         <div className="space-y-3">
-          <h3 className="text-sm font-bold text-slate-900">Scheduled Bookings ({meetings.length})</h3>
-          {meetings.length === 0 ? (
+          <h3 className="text-sm font-bold text-slate-900">Upcoming Bookings ({upcomingMeetings.length})</h3>
+          {upcomingMeetings.length === 0 ? (
             <div className="p-8 text-center text-sm text-slate-500 border border-dashed border-slate-300 rounded-xl">
-              No meetings scheduled yet.
+              No upcoming meetings scheduled.
             </div>
           ) : (
-            meetings.map((m) => (
+            upcomingMeetings.map((m) => (
               <div
                 key={m.id}
                 className="p-4 rounded-xl border border-slate-200 flex items-center justify-between gap-3"
