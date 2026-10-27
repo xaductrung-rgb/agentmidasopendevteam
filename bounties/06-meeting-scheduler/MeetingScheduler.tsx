@@ -21,13 +21,6 @@ export interface MeetingSchedulerProps {
 
 const TIME_SLOTS = ['09:00', '10:00', '11:00', '13:30', '15:00', '16:30'];
 
-const TZ_OFFSET_MINUTES: Record<string, number> = {
-  'America/New_York': -300,
-  'America/Los_Angeles': -480,
-  'Europe/London': 0,
-  UTC: 0
-};
-
 const DEFAULT_MEETINGS: ScheduledMeeting[] = [
   {
     id: 'mtg-1',
@@ -36,7 +29,7 @@ const DEFAULT_MEETINGS: ScheduledMeeting[] = [
     date: '2026-11-02',
     slot: '10:00',
     durationMinutes: 30,
-    timezone: 'America/New_York',
+    timezone: 'UTC-05:00',
     topic: 'Enterprise Two-Up Affiliate Onboarding'
   },
   {
@@ -46,7 +39,7 @@ const DEFAULT_MEETINGS: ScheduledMeeting[] = [
     date: '2026-11-02',
     slot: '15:00',
     durationMinutes: 45,
-    timezone: 'UTC',
+    timezone: 'UTC+00:00',
     topic: 'Q4 Funnel Conversion Audit'
   }
 ];
@@ -69,10 +62,17 @@ function isValidMeetingList(val: unknown): val is ScheduledMeeting[] {
   );
 }
 
+function parseUtcOffsetMinutes(tz: string): number {
+  const m = tz.match(/^UTC([+-])(d{2}):(d{2})$/);
+  if (!m) return 0;
+  const sign = m[1] === '-' ? -1 : 1;
+  return sign * (Number(m[2]) * 60 + Number(m[3]));
+}
+
 function toUtcInterval(date: string, slot: string, durationMinutes: number, tz: string): [number, number] {
   const [hStr, mStr] = slot.split(':');
   const localMins = Number(hStr) * 60 + Number(mStr);
-  const offset = TZ_OFFSET_MINUTES[tz] ?? 0;
+  const offset = parseUtcOffsetMinutes(tz);
   const dayEpochMins = Math.floor(Date.parse(`${date}T00:00:00Z`) / 60000);
   const startUtc = dayEpochMins + localMins - offset;
   return [startUtc, startUtc + durationMinutes];
@@ -91,7 +91,7 @@ export function MeetingScheduler({
   const [selectedDate, setSelectedDate] = useState('2026-11-02');
   const [selectedSlot, setSelectedSlot] = useState('11:00');
   const [durationMinutes, setDurationMinutes] = useState(30);
-  const [timezone, setTimezone] = useState('America/New_York');
+  const [timezone, setTimezone] = useState('UTC-05:00');
   const [clientName, setClientName] = useState('');
   const [clientEmail, setClientEmail] = useState('');
   const [topic, setTopic] = useState('');
@@ -188,7 +188,7 @@ export function MeetingScheduler({
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-slate-900">Client Meeting Scheduler</h2>
         <p className="text-sm text-slate-600">
-          Book conflict-free client sessions with UTC interval overlap checks and timezone alignment.
+          Book conflict-free client sessions with UTC interval overlap checks and explicit offset alignment.
         </p>
       </div>
 
@@ -216,7 +216,7 @@ export function MeetingScheduler({
             </div>
             <div>
               <label htmlFor="mtg-tz" className="block text-xs font-semibold text-slate-600 mb-1">
-                Timezone
+                UTC Offset
               </label>
               <select
                 id="mtg-tz"
@@ -224,10 +224,10 @@ export function MeetingScheduler({
                 onChange={(e) => setTimezone(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
               >
-                <option value="America/New_York">America/New_York (EST)</option>
-                <option value="America/Los_Angeles">America/Los_Angeles (PST)</option>
-                <option value="Europe/London">Europe/London (GMT)</option>
-                <option value="UTC">UTC</option>
+                <option value="UTC-05:00">UTC-05:00 (US Eastern)</option>
+                <option value="UTC-08:00">UTC-08:00 (US Pacific)</option>
+                <option value="UTC+00:00">UTC+00:00 (UTC / GMT)</option>
+                <option value="UTC+07:00">UTC+07:00 (ICT)</option>
               </select>
             </div>
           </div>
@@ -242,7 +242,7 @@ export function MeetingScheduler({
                   <button
                     key={slot}
                     type="button"
-                    disabled={isBooked}
+                    disabled={isBooked || isSaving}
                     aria-pressed={isSelected}
                     onClick={() => setSelectedSlot(slot)}
                     className={`py-2 rounded-lg text-xs font-semibold border ${
@@ -298,14 +298,15 @@ export function MeetingScheduler({
           />
           <button
             type="submit"
-            className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg text-sm"
+            disabled={isSaving}
+            className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold rounded-lg text-sm"
           >
-            Confirm Booking
+            {isSaving ? 'Saving...' : 'Confirm Booking'}
           </button>
         </form>
 
         <div className="space-y-3">
-          <h3 className="text-sm font-bold text-slate-900">Upcoming Bookings ({meetings.length})</h3>
+          <h3 className="text-sm font-bold text-slate-900">Scheduled Bookings ({meetings.length})</h3>
           {meetings.length === 0 ? (
             <div className="p-8 text-center text-sm text-slate-500 border border-dashed border-slate-300 rounded-xl">
               No meetings scheduled yet.
@@ -327,8 +328,9 @@ export function MeetingScheduler({
                 </div>
                 <button
                   type="button"
+                  disabled={isSaving}
                   onClick={() => void cancelMeeting(m.id)}
-                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-red-200 text-red-700 hover:bg-red-50"
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-red-200 text-red-700 hover:bg-red-50 disabled:opacity-50"
                 >
                   Cancel
                 </button>
